@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { webgl, scene } from './renderer.js';
+import { createPanel } from './css3dPanel.js';
+import { registerPanel } from './renderer.js';
 
 export function initScene() {
   // Enable shadow maps
@@ -22,4 +24,9 @@ export function initScene() {
   const cube = new THREE.Mesh(geometry, material);
   cube.castShadow = true;
   scene.add(cube);
+
+  // Test CSS3D panel
+  const anchorPos = new THREE.Vector3(0, 5, 0);
+  const panel = createPanel(anchorPos, 'Hello from CSS3D');
+  registerPanel(panel, anchorPos);
 }

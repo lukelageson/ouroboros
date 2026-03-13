@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { positionPanelFacingCamera } from './panelManager.js';
 
 const container = document.getElementById('app');
 
@@ -32,6 +34,18 @@ camera.lookAt(0, 0, 0);
 const scene = new THREE.Scene();
 const css3dScene = new THREE.Scene();
 
+// Orbit controls — attach to WebGL canvas so mouse events work
+const controls = new OrbitControls(camera, webgl.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+
+// Panel tracking: array of { panel, anchorPosition }
+const activePanels = [];
+
+export function registerPanel(panel, anchorPosition) {
+  activePanels.push({ panel, anchorPosition });
+}
+
 // Resize handler
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
@@ -45,6 +59,13 @@ window.addEventListener('resize', () => {
 // Animation loop
 function animate() {
   requestAnimationFrame(animate);
+  controls.update();
+
+  // Update panel positions each frame
+  for (const { panel, anchorPosition } of activePanels) {
+    positionPanelFacingCamera(panel, anchorPosition, camera);
+  }
+
   webgl.render(scene, camera);
   css3d.render(css3dScene, camera);
 }
