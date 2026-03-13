@@ -3,7 +3,9 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls /c/Users/Luke/Documents/11_Coding/Repos/ouroboros/frontend/node_modules/.bin/vite*)"
     ]
   }
 }
