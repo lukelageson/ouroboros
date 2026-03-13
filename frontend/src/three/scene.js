@@ -36,8 +36,12 @@ export function initScene() {
   scene.add(ground);
 
   // Spiral — hardcoded birthday 40 years ago
+  const DAYS_IN_YEAR = 365.25;
+  const MS_PER_DAY = 86400000;
   const today = new Date();
   const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
+  const spiralTopY = ((today - birthday) / (DAYS_IN_YEAR * MS_PER_DAY)) * 8;
+
   const spiral = buildSpiral(birthday, today);
   scene.add(spiral);
 
@@ -47,5 +51,5 @@ export function initScene() {
   for (const seg of dividerObjects) scene.add(seg);
   for (const label of labels) css3dScene.add(label);
 
-  return { ribbonMesh, dividerObjects, labels };
+  return { ribbonMesh, dividerObjects, labels, spiralTopY };
 }

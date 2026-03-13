@@ -19,7 +19,8 @@
       "Bash(PGPASSWORD=password psql -U postgres -c \"CREATE DATABASE ouroboros_dev;\")",
       "Bash(node src/db/migrate.js)",
       "Bash(PGPASSWORD=password psql -U postgres -d ouroboros_dev -c \"DELETE FROM users WHERE email=''test@ouroboros.dev'';\")",
-      "Bash(PGPASSWORD=password psql -U postgres -d ouroboros_dev -c \"DELETE FROM entries WHERE user_id IN \\(SELECT id FROM users WHERE email=''test14@ouroboros.dev''\\); DELETE FROM users WHERE email=''test14@ouroboros.dev'';\")"
+      "Bash(PGPASSWORD=password psql -U postgres -d ouroboros_dev -c \"DELETE FROM entries WHERE user_id IN \\(SELECT id FROM users WHERE email=''test14@ouroboros.dev''\\); DELETE FROM users WHERE email=''test14@ouroboros.dev'';\")",
+      "Bash(node -e \"const pkg = require\\(''''./frontend/node_modules/three/package.json''''\\); const addons = pkg.exports?.[''''./addons/*'''']; console.log\\(JSON.stringify\\(addons, null, 2\\)\\)\")"
     ]
   }
 }

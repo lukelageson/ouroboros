@@ -93,4 +93,4 @@ export function initRenderer() {
   animate();
 }
 
-export { webgl, css3d, camera, scene, css3dScene };
+export { webgl, css3d, camera, scene, css3dScene, controls };
