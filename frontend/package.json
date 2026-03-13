@@ -1,0 +1,16 @@
+{
+  "name": "ouroboros-frontend",
+  "version": "1.0.0",
+  "description": "Ouroboros journaling app frontend",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "vite": "^6.2.0"
+  }
+}
