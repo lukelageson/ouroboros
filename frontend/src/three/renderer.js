@@ -39,6 +39,16 @@ const controls = new OrbitControls(camera, webgl.domElement);
 controls.target.set(0, 160, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
+controls.maxPolarAngle = Math.PI / 2; // prevent camera from going below ground
+controls.maxDistance = 500; // limit zoom out
+controls.zoomToCursor = true; // zoom towards mouse position
+
+// Per-frame callbacks (e.g. ribbon label billboarding)
+const frameCallbacks = [];
+
+export function registerFrameCallback(fn) {
+  frameCallbacks.push(fn);
+}
 
 // Panel tracking: array of { panel, anchorPosition }
 const activePanels = [];
@@ -62,9 +72,17 @@ function animate() {
   requestAnimationFrame(animate);
   controls.update();
 
+  // Clamp camera above ground plane (zoomToCursor can push it below)
+  if (camera.position.y < 1) camera.position.y = 1;
+
   // Update panel positions each frame
   for (const { panel, anchorPosition } of activePanels) {
     positionPanelFacingCamera(panel, anchorPosition, camera);
+  }
+
+  // Run registered frame callbacks
+  for (const fn of frameCallbacks) {
+    fn(camera);
   }
 
   webgl.render(scene, camera);

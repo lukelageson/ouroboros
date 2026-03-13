@@ -1,88 +1,98 @@
 import * as THREE from 'three';
-import { webgl } from './renderer.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 /**
- * Generates a 512x512 DataTexture with ~2000 warm-tinted star pixels.
+ * Custom shader: multiply-tint (not blendOverlay), animated ripple
+ * distortion, and multi-tap blur for a natural reflective-water look.
  */
-function createStarfieldTexture() {
-  const size = 512;
-  const data = new Uint8Array(size * size * 4);
+const RippleReflectorShader = {
+  name: 'RippleReflectorShader',
+  uniforms: {
+    color: { value: null },
+    tDiffuse: { value: null },
+    textureMatrix: { value: null },
+    time: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUv;
+    varying vec3 vWorldPos;
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    void main() {
+      vUv = textureMatrix * vec4( position, 1.0 );
+      vWorldPos = (modelMatrix * vec4( position, 1.0 )).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+      #include <logdepthbuf_vertex>
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform vec3 color;
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    varying vec4 vUv;
+    varying vec3 vWorldPos;
+    #include <logdepthbuf_pars_fragment>
 
-  // Fill with near-black
-  for (let i = 0; i < data.length; i += 4) {
-    data[i] = 2;
-    data[i + 1] = 1;
-    data[i + 2] = 1;
-    data[i + 3] = 255;
-  }
+    void main() {
+      #include <logdepthbuf_fragment>
 
-  // Place ~2000 stars with warm tint (white to #ffe8c0)
-  for (let s = 0; s < 2000; s++) {
-    const x = Math.floor(Math.random() * size);
-    const y = Math.floor(Math.random() * size);
-    const idx = (y * size + x) * 4;
-    const brightness = 0.3 + Math.random() * 0.7;
+      // Ripple distortion based on world position
+      float ripple1 = sin(vWorldPos.x * 0.06 + time * 0.8) * cos(vWorldPos.z * 0.04 + time * 0.6);
+      float ripple2 = sin(vWorldPos.x * 0.10 - time * 0.5) * cos(vWorldPos.z * 0.08 + time * 0.9);
+      vec2 distortion = vec2(ripple1 + ripple2, ripple1 - ripple2) * 0.004;
 
-    // Warm tint: R=255, G=232, B=192 scaled by brightness
-    data[idx] = Math.floor(255 * brightness);
-    data[idx + 1] = Math.floor(232 * brightness);
-    data[idx + 2] = Math.floor(192 * brightness);
-    data[idx + 3] = 255;
-  }
+      // Multi-tap blur (5 samples)
+      float blurSize = 0.002;
+      vec4 vUvDistorted = vUv;
+      vUvDistorted.xy += distortion * vUv.w;
 
-  const texture = new THREE.DataTexture(data, size, size);
-  texture.needsUpdate = true;
-  return texture;
-}
+      vec4 acc = texture2DProj( tDiffuse, vUvDistorted );
+      acc += texture2DProj( tDiffuse, vUvDistorted + vec4( blurSize,  0.0, 0.0, 0.0) * vUv.w );
+      acc += texture2DProj( tDiffuse, vUvDistorted + vec4(-blurSize,  0.0, 0.0, 0.0) * vUv.w );
+      acc += texture2DProj( tDiffuse, vUvDistorted + vec4( 0.0,  blurSize, 0.0, 0.0) * vUv.w );
+      acc += texture2DProj( tDiffuse, vUvDistorted + vec4( 0.0, -blurSize, 0.0, 0.0) * vUv.w );
+      acc /= 5.0;
 
-/**
- * Creates a starfield environment map using PMREMGenerator.
- * Returns a processed envMap suitable for material.envMap.
- */
-function createStarfieldEnvMap() {
-  const starTexture = createStarfieldTexture();
+      gl_FragColor = vec4( acc.rgb * color, 1.0 );
 
-  // Create a cube render target scene with the star texture on a sphere
-  const envScene = new THREE.Scene();
-  const envGeo = new THREE.SphereGeometry(100, 32, 32);
-  const envMat = new THREE.MeshBasicMaterial({
-    map: starTexture,
-    side: THREE.BackSide,
-  });
-  envScene.add(new THREE.Mesh(envGeo, envMat));
-
-  const pmrem = new THREE.PMREMGenerator(webgl);
-  pmrem.compileCubemapShader();
-  const envMap = pmrem.fromScene(envScene, 0, 0.1, 1000).texture;
-  pmrem.dispose();
-
-  envGeo.dispose();
-  envMat.dispose();
-  starTexture.dispose();
-
-  return envMap;
-}
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+};
 
 /**
- * Builds the reflective ground plane at Y=0 with starfield reflection.
+ * Builds a reflective ground plane at Y=0 using Reflector for real-time
+ * reflections of all scene objects (spiral, beads, etc.).
+ * Large size (10000x10000) combined with scene fog creates infinite appearance.
  */
 export function buildGroundPlane() {
-  const envMap = createStarfieldEnvMap();
+  const geometry = new THREE.PlaneGeometry(10000, 10000);
 
-  const geometry = new THREE.PlaneGeometry(400, 400);
-  const material = new THREE.MeshPhysicalMaterial({
-    color: 0x1a1008,
-    roughness: 0.08,
-    metalness: 0.4,
-    reflectivity: 1.0,
-    envMap,
-    envMapIntensity: 1.0,
+  // Half-resolution render target for natural softness
+  const scale = 0.5;
+  const ground = new Reflector(geometry, {
+    color: new THREE.Color(0x887060),
+    textureWidth: Math.floor(window.innerWidth * window.devicePixelRatio * scale),
+    textureHeight: Math.floor(window.innerHeight * window.devicePixelRatio * scale),
+    shader: RippleReflectorShader,
   });
 
-  const plane = new THREE.Mesh(geometry, material);
-  plane.rotation.x = -Math.PI / 2;
-  plane.position.y = 0;
-  plane.receiveShadow = true;
+  // Animate the ripple time uniform
+  const clock = new THREE.Clock();
+  const origOnBeforeRender = ground.onBeforeRender.bind(ground);
+  ground.onBeforeRender = function (renderer, scene, camera) {
+    // Update ripple time
+    ground.material.uniforms.time.value = clock.getElapsedTime();
 
-  return plane;
+    // Disable fog during the reflection render pass
+    const savedFog = scene.fog;
+    scene.fog = null;
+    origOnBeforeRender(renderer, scene, camera);
+    scene.fog = savedFog;
+  };
+
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = 0;
+
+  return ground;
 }

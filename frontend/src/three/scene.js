@@ -1,15 +1,17 @@
 import * as THREE from 'three';
-import { webgl, scene } from './renderer.js';
+import { webgl, scene, css3dScene } from './renderer.js';
 import { buildSpiral } from './spiralGeometry.js';
 import { buildGroundPlane } from './groundPlane.js';
+import { buildRibbon } from './ribbon.js';
 
 export function initScene() {
   // Enable shadow maps
   webgl.shadowMap.enabled = true;
   webgl.shadowMap.type = THREE.PCFSoftShadowMap;
 
-  // Scene background — dark warm, no stars
-  scene.background = new THREE.Color('#0e0a06');
+  // Scene background and fog — dark warm, fog hides ground plane edges
+  scene.background = new THREE.Color('#000000');
+  scene.fog = new THREE.FogExp2(0x000000, 0.0015);
 
   // Ambient light
   const ambient = new THREE.AmbientLight(0xffe8c0, 0.3);
@@ -38,4 +40,13 @@ export function initScene() {
   const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
   const spiral = buildSpiral(birthday, today);
   scene.add(spiral);
+
+  // Ribbon overlay with month/year labels
+  const { ribbonMesh, labels } = buildRibbon(birthday, today);
+  scene.add(ribbonMesh);
+  for (const label of labels) {
+    css3dScene.add(label);
+  }
+
+  return { ribbonMesh, labels };
 }
