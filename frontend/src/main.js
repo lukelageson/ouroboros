@@ -1,22 +1,23 @@
-import { initRenderer, registerFrameCallback, scene, css3dScene } from './three/renderer.js';
+import { initRenderer, registerFrameCallback } from './three/renderer.js';
 import { initScene } from './three/scene.js';
 import { updateRibbonLabels } from './three/ribbon.js';
 
 initRenderer();
-const { ribbonMesh, labels } = initScene();
+const { ribbonMesh, dividerLines, labels } = initScene();
 
-// Billboard ribbon labels each frame
+let ribbonVisible = true;
+
+// Update ribbon label visibility each frame (far-side culling + toggle)
 registerFrameCallback((camera) => {
-  updateRibbonLabels(labels, camera);
+  updateRibbonLabels(labels, camera, ribbonVisible);
 });
 
-// R key toggles ribbon and labels visibility
+// R key toggles ribbon, dividers, and labels
 window.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
-    const visible = !ribbonMesh.visible;
-    ribbonMesh.visible = visible;
-    for (const label of labels) {
-      label.visible = visible;
-    }
+    ribbonVisible = !ribbonVisible;
+    ribbonMesh.visible = ribbonVisible;
+    dividerLines.visible = ribbonVisible;
+    // labels are handled per-frame in updateRibbonLabels
   }
 });

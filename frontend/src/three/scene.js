@@ -42,11 +42,12 @@ export function initScene() {
   scene.add(spiral);
 
   // Ribbon overlay with month/year labels
-  const { ribbonMesh, labels } = buildRibbon(birthday, today);
+  const { ribbonMesh, dividerLines, labels } = buildRibbon(birthday, today);
   scene.add(ribbonMesh);
+  scene.add(dividerLines);
   for (const label of labels) {
     css3dScene.add(label);
   }
 
-  return { ribbonMesh, labels };
+  return { ribbonMesh, dividerLines, labels };
 }

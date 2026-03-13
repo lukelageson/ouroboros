@@ -5,7 +5,7 @@ import { dateToAngle, dateToPosition } from './spiralMath.js';
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY = 86400000;
 const RIBBON_RADIUS = 42; // spiral radius (40) + 2
-const RIBBON_WIDTH = 1.5; // width of the flat ribbon strip
+const RIBBON_WIDTH = 4.5; // width of the flat ribbon strip
 
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -77,11 +77,11 @@ export function buildRibbon(birthday, today) {
 
   for (let i = 0; i < numSegments; i++) {
     const a = i * 2;
-    const b = a + 1;
+    const bIdx = a + 1;
     const c = a + 2;
     const d = a + 3;
-    indices.push(a, b, c);
-    indices.push(b, d, c);
+    indices.push(a, bIdx, c);
+    indices.push(bIdx, d, c);
   }
 
   const geometry = new THREE.BufferGeometry();
@@ -94,12 +94,14 @@ export function buildRibbon(birthday, today) {
     transparent: true,
     opacity: 0.12,
     side: THREE.DoubleSide,
+    depthWrite: true, // write depth so divider lines behind ribbon are occluded
   });
 
   const ribbonMesh = new THREE.Mesh(geometry, material);
 
-  // --- Labels at month and year boundaries ---
+  // --- Month divider lines and labels ---
   const labels = [];
+  const dividerPoints = [];
 
   // Find first month boundary after birthday
   let cursor = new Date(b.getFullYear(), b.getMonth() + 1, 1);
@@ -108,9 +110,20 @@ export function buildRibbon(birthday, today) {
     const month = cursor.getMonth();
     const year = cursor.getFullYear();
     const isYearBoundary = month === 0;
+    const angle = dateToAngle(cursor);
+    const yearsElapsed = (cursor - b) / (DAYS_IN_YEAR * MS_PER_DAY);
+    const y = yearsElapsed * 8;
 
+    // Divider line: radial segment across the ribbon width
+    const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
+    const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
+    dividerPoints.push(
+      new THREE.Vector3(rInner * Math.cos(angle), y, rInner * Math.sin(angle)),
+      new THREE.Vector3(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle))
+    );
+
+    // Label — positioned on the ribbon, oriented to face radially outward
     const pos = ribbonPosition(cursor, birthday);
-    pos.y += 1; // offset above ribbon
 
     const div = document.createElement('div');
     div.style.fontFamily = 'sans-serif';
@@ -122,28 +135,69 @@ export function buildRibbon(birthday, today) {
       div.style.fontSize = '13px';
       div.style.color = 'rgba(255,245,230,0.9)';
     } else {
-      div.textContent = MONTH_NAMES[month];
-      div.style.fontSize = '10px';
-      div.style.color = 'rgba(255,245,230,0.6)';
+      div.textContent = MONTH_NAMES[month].toUpperCase();
+      div.style.fontSize = '50px';
+      div.style.color = 'rgba(255,245,230,0.12)';
     }
 
     const label = new CSS3DObject(div);
     label.position.copy(pos);
-    label.scale.setScalar(0.05); // match CSS3D to Three.js units
+    label.scale.setScalar(0.05);
+
+    // Orient label to lie flat on the ribbon surface:
+    // - Face normal points up (Y) so text is readable from above, like printed on the ribbon
+    // - Text right direction = tangent along spiral
+    // - Text up direction = radially outward (away from center)
+    const outward = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
+    const tangent = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle));
+    const yUp = new THREE.Vector3(0, 1, 0);
+
+    // makeBasis(right, up, normal): right=tangent, up=outward, normal=Y
+    const m = new THREE.Matrix4();
+    m.makeBasis(tangent, outward, yUp);
+    label.quaternion.setFromRotationMatrix(m);
+
+    // Store the angle for far-side culling
+    label.userData.angle = angle;
     labels.push(label);
 
     // Advance to next month
     cursor = new Date(year, month + 1, 1);
   }
 
-  return { ribbonMesh, labels };
+  // Build divider line segments
+  const dividerGeometry = new THREE.BufferGeometry().setFromPoints(dividerPoints);
+  const dividerMaterial = new THREE.LineBasicMaterial({
+    color: 0xfff5e6,
+    transparent: true,
+    opacity: 0.15,
+  });
+  const dividerLines = new THREE.LineSegments(dividerGeometry, dividerMaterial);
+
+  return { ribbonMesh, dividerLines, labels };
 }
 
 /**
- * Billboard all ribbon labels to face the camera each frame.
+ * Hide labels on the far side of the spiral (facing away from camera).
+ * Respects the ribbonVisible flag from the R key toggle.
  */
-export function updateRibbonLabels(labels, camera) {
+export function updateRibbonLabels(labels, camera, ribbonVisible) {
+  const camAngle = Math.atan2(camera.position.z, camera.position.x);
+
   for (const label of labels) {
-    label.lookAt(camera.position);
+    if (!ribbonVisible) {
+      label.visible = false;
+      continue;
+    }
+
+    const labelAngle = label.userData.angle;
+
+    // Angular difference, wrapped to [-π, π]
+    let diff = labelAngle - camAngle;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+
+    // Hide if on the far side (more than 90° from camera's view)
+    label.visible = Math.abs(diff) < Math.PI / 2;
   }
 }
