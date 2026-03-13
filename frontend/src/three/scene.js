@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { webgl, scene } from './renderer.js';
-import { createPanel } from './css3dPanel.js';
-import { registerPanel } from './renderer.js';
+import { buildSpiral } from './spiralGeometry.js';
 
 export function initScene() {
   // Enable shadow maps
@@ -18,15 +17,9 @@ export function initScene() {
   directional.castShadow = true;
   scene.add(directional);
 
-  // Temporary test cube
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshStandardMaterial({ color: 0xffffff });
-  const cube = new THREE.Mesh(geometry, material);
-  cube.castShadow = true;
-  scene.add(cube);
-
-  // Test CSS3D panel
-  const anchorPos = new THREE.Vector3(0, 5, 0);
-  const panel = createPanel(anchorPos, 'Hello from CSS3D');
-  registerPanel(panel, anchorPos);
+  // Spiral — hardcoded birthday 40 years ago
+  const today = new Date();
+  const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
+  const spiral = buildSpiral(birthday, today);
+  scene.add(spiral);
 }

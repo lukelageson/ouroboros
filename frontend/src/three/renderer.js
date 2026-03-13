@@ -20,15 +20,15 @@ css3d.domElement.style.left = '0';
 css3d.domElement.style.pointerEvents = 'none';
 container.appendChild(css3d.domElement);
 
-// Camera — Plan View default: looking straight down
+// Camera — Perspective view to see spiral in 3D
 const camera = new THREE.PerspectiveCamera(
   60,
   window.innerWidth / window.innerHeight,
   0.1,
-  1000
+  2000
 );
-camera.position.set(0, 80, 0);
-camera.lookAt(0, 0, 0);
+camera.position.set(0, 60, 80);
+camera.lookAt(0, 160, 0);
 
 // Scenes
 const scene = new THREE.Scene();
@@ -36,6 +36,7 @@ const css3dScene = new THREE.Scene();
 
 // Orbit controls — attach to WebGL canvas so mouse events work
 const controls = new OrbitControls(camera, webgl.domElement);
+controls.target.set(0, 160, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 
