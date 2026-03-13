@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { dateToAngle } from './spiralMath.js';
 
 const DAYS_IN_YEAR = 365.25;
@@ -123,10 +126,13 @@ export function buildRibbon(birthday, today) {
   const labels = [];
   const dividerObjects = [];
 
-  const dividerMaterial = new THREE.LineBasicMaterial({
+  // Shared Line2 material — 3× thickness (LineBasicMaterial linewidth is ignored on WebGL)
+  const dividerMaterial = new LineMaterial({
     color: 0xfff5e6,
     transparent: true,
     opacity: 0.15,
+    linewidth: 3, // pixels
+    resolution: new THREE.Vector2(window.innerWidth * window.devicePixelRatio, window.innerHeight * window.devicePixelRatio),
   });
 
   let cursor = new Date(b.getFullYear(), b.getMonth() + 1, 1);
@@ -139,20 +145,25 @@ export function buildRibbon(birthday, today) {
     const yearsElapsed = (cursor - b) / (DAYS_IN_YEAR * MS_PER_DAY);
     const y = yearsElapsed * 8;
 
-    // One LineSegments per divider — enables per-segment angular + height culling
+    // One Line2 per divider — enables per-segment angular + height culling
     const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
     const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
-    const segGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(rInner * Math.cos(angle), y, rInner * Math.sin(angle)),
-      new THREE.Vector3(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle)),
+    const segGeo = new LineGeometry();
+    segGeo.setPositions([
+      rInner * Math.cos(angle), y, rInner * Math.sin(angle),
+      rOuter * Math.cos(angle), y, rOuter * Math.sin(angle),
     ]);
-    const seg = new THREE.LineSegments(segGeo, dividerMaterial);
+    const seg = new Line2(segGeo, dividerMaterial);
+    seg.computeLineDistances();
     seg.userData.angle = angle;
     seg.userData.y = y;
     dividerObjects.push(seg);
 
-    // Label
-    const pos = ribbonPosition(cursor, birthday);
+    // Label — placed at midpoint of month segment (half-month after boundary)
+    const nextCursor = new Date(year, month + 1, 1);
+    const midDate = new Date((cursor.getTime() + nextCursor.getTime()) / 2);
+    const midAngle = dateToAngle(midDate);
+    const pos = ribbonPosition(midDate, birthday);
 
     const div = document.createElement('div');
     div.style.fontFamily = 'sans-serif';
@@ -175,19 +186,19 @@ export function buildRibbon(birthday, today) {
 
     // 180° in-plane rotation so text reads from outside the spiral.
     // Flip both tangent (right) and outward (up); normal (yUp) stays.
-    const tangent = new THREE.Vector3(Math.sin(angle), 0, -Math.cos(angle));
-    const outward = new THREE.Vector3(-Math.cos(angle), 0, -Math.sin(angle));
+    const tangent = new THREE.Vector3(Math.sin(midAngle), 0, -Math.cos(midAngle));
+    const outward = new THREE.Vector3(-Math.cos(midAngle), 0, -Math.sin(midAngle));
     const yUp = new THREE.Vector3(0, 1, 0);
 
     const m = new THREE.Matrix4();
     m.makeBasis(tangent, outward, yUp);
     label.quaternion.setFromRotationMatrix(m);
 
-    label.userData.angle = angle;
+    label.userData.angle = midAngle;
     label.userData.y = pos.y;
     labels.push(label);
 
-    cursor = new Date(year, month + 1, 1);
+    cursor = nextCursor;
   }
 
   return { ribbonMesh, dividerObjects, labels };
