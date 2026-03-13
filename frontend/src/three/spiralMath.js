@@ -40,7 +40,7 @@ export function dateToPosition(date, birthday) {
   const b = new Date(birthday);
 
   const yearsElapsed = (d - b) / (DAYS_IN_YEAR * MS_PER_DAY);
-  const radius = 10 + yearsElapsed * 0.5;
+  const radius = 20;
   const angle = dateToAngle(date);
   const x = radius * Math.cos(angle);
   const z = radius * Math.sin(angle);
