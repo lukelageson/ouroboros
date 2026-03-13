@@ -1,20 +1,21 @@
 import * as THREE from 'three';
 import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-import { dateToAngle, dateToPosition } from './spiralMath.js';
+import { dateToAngle } from './spiralMath.js';
 
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY = 86400000;
 const RIBBON_RADIUS = 42; // spiral radius (40) + 2
-const RIBBON_WIDTH = 4.5; // width of the flat ribbon strip
+const RIBBON_WIDTH = 4.5;
+
+// Visibility thresholds
+const HEIGHT_RADIUS = 80;    // world-unit half-height of visible ribbon window around camera Y
+const ZOOM_THRESHOLD = 120;  // max camera horizontal distance from origin before ribbon hides
 
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
-/**
- * Position on the ribbon's outer edge for a given date.
- */
 function ribbonPosition(date, birthday) {
   const d = new Date(date);
   const b = new Date(birthday);
@@ -27,8 +28,7 @@ function ribbonPosition(date, birthday) {
 }
 
 /**
- * Builds the ribbon mesh (flat strip along outer edge of spiral)
- * and CSS3D labels at month/year boundaries.
+ * Builds the ribbon mesh, individual divider line objects, and CSS3D labels.
  */
 export function buildRibbon(birthday, today) {
   const b = new Date(birthday);
@@ -36,7 +36,7 @@ export function buildRibbon(birthday, today) {
   const totalMs = t - b;
   const numSegments = 2000;
 
-  // --- Ribbon geometry: two rows of vertices forming a flat strip ---
+  // --- Ribbon geometry ---
   const innerVerts = [];
   const outerVerts = [];
 
@@ -47,30 +47,18 @@ export function buildRibbon(birthday, today) {
     const yearsElapsed = (date - b) / (DAYS_IN_YEAR * MS_PER_DAY);
     const y = yearsElapsed * 8;
 
-    // Inner edge (closer to spiral center)
     const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
-    innerVerts.push(
-      rInner * Math.cos(angle),
-      y,
-      rInner * Math.sin(angle)
-    );
+    innerVerts.push(rInner * Math.cos(angle), y, rInner * Math.sin(angle));
 
-    // Outer edge
     const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
-    outerVerts.push(
-      rOuter * Math.cos(angle),
-      y,
-      rOuter * Math.sin(angle)
-    );
+    outerVerts.push(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle));
   }
 
-  // Build indexed triangle strip from inner/outer rows
   const positions = [];
   const indices = [];
 
   for (let i = 0; i <= numSegments; i++) {
     const ix = i * 3;
-    // vertex 2*i = inner, vertex 2*i+1 = outer
     positions.push(innerVerts[ix], innerVerts[ix + 1], innerVerts[ix + 2]);
     positions.push(outerVerts[ix], outerVerts[ix + 1], outerVerts[ix + 2]);
   }
@@ -89,21 +77,58 @@ export function buildRibbon(birthday, today) {
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
 
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xfff5e6,
+  // ShaderMaterial: fades ribbon by height-proximity and zoom-distance
+  const ribbonMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      baseColor:      { value: new THREE.Color(0xfff5e6) },
+      baseOpacity:    { value: 0.12 },
+      cameraY:        { value: 0 },
+      cameraHDist:    { value: 0 },
+      heightRadius:   { value: HEIGHT_RADIUS },
+      zoomThreshold:  { value: ZOOM_THRESHOLD },
+    },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3  baseColor;
+      uniform float baseOpacity;
+      uniform float cameraY;
+      uniform float cameraHDist;
+      uniform float heightRadius;
+      uniform float zoomThreshold;
+      varying vec3  vWorldPos;
+      void main() {
+        float yDist  = abs(vWorldPos.y - cameraY);
+        float yAlpha = 1.0 - smoothstep(heightRadius * 0.6, heightRadius, yDist);
+        float zAlpha = 1.0 - smoothstep(zoomThreshold * 0.7, zoomThreshold, cameraHDist);
+        float alpha  = baseOpacity * yAlpha * zAlpha;
+        if (alpha < 0.002) discard;
+        gl_FragColor = vec4(baseColor, alpha);
+      }
+    `,
     transparent: true,
-    opacity: 0.12,
+    depthWrite: false,
     side: THREE.DoubleSide,
-    depthWrite: true, // write depth so divider lines behind ribbon are occluded
   });
 
-  const ribbonMesh = new THREE.Mesh(geometry, material);
+  const ribbonMesh = new THREE.Mesh(geometry, ribbonMaterial);
 
-  // --- Month divider lines and labels ---
+  // --- Individual divider line objects and labels ---
   const labels = [];
-  const dividerPoints = [];
+  const dividerObjects = [];
 
-  // Find first month boundary after birthday
+  const dividerMaterial = new THREE.LineBasicMaterial({
+    color: 0xfff5e6,
+    transparent: true,
+    opacity: 0.15,
+  });
+
   let cursor = new Date(b.getFullYear(), b.getMonth() + 1, 1);
 
   while (cursor <= t) {
@@ -114,15 +139,19 @@ export function buildRibbon(birthday, today) {
     const yearsElapsed = (cursor - b) / (DAYS_IN_YEAR * MS_PER_DAY);
     const y = yearsElapsed * 8;
 
-    // Divider line: radial segment across the ribbon width
+    // One LineSegments per divider — enables per-segment angular + height culling
     const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
     const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
-    dividerPoints.push(
+    const segGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(rInner * Math.cos(angle), y, rInner * Math.sin(angle)),
-      new THREE.Vector3(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle))
-    );
+      new THREE.Vector3(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle)),
+    ]);
+    const seg = new THREE.LineSegments(segGeo, dividerMaterial);
+    seg.userData.angle = angle;
+    seg.userData.y = y;
+    dividerObjects.push(seg);
 
-    // Label — positioned on the ribbon, oriented to face radially outward
+    // Label
     const pos = ribbonPosition(cursor, birthday);
 
     const div = document.createElement('div');
@@ -144,60 +173,60 @@ export function buildRibbon(birthday, today) {
     label.position.copy(pos);
     label.scale.setScalar(0.05);
 
-    // Orient label to lie flat on the ribbon surface:
-    // - Face normal points up (Y) so text is readable from above, like printed on the ribbon
-    // - Text right direction = tangent along spiral
-    // - Text up direction = radially outward (away from center)
-    const outward = new THREE.Vector3(Math.cos(angle), 0, Math.sin(angle));
-    const tangent = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle));
+    // 180° in-plane rotation so text reads from outside the spiral.
+    // Flip both tangent (right) and outward (up); normal (yUp) stays.
+    const tangent = new THREE.Vector3(Math.sin(angle), 0, -Math.cos(angle));
+    const outward = new THREE.Vector3(-Math.cos(angle), 0, -Math.sin(angle));
     const yUp = new THREE.Vector3(0, 1, 0);
 
-    // makeBasis(right, up, normal): right=tangent, up=outward, normal=Y
     const m = new THREE.Matrix4();
     m.makeBasis(tangent, outward, yUp);
     label.quaternion.setFromRotationMatrix(m);
 
-    // Store the angle for far-side culling
     label.userData.angle = angle;
+    label.userData.y = pos.y;
     labels.push(label);
 
-    // Advance to next month
     cursor = new Date(year, month + 1, 1);
   }
 
-  // Build divider line segments
-  const dividerGeometry = new THREE.BufferGeometry().setFromPoints(dividerPoints);
-  const dividerMaterial = new THREE.LineBasicMaterial({
-    color: 0xfff5e6,
-    transparent: true,
-    opacity: 0.15,
-  });
-  const dividerLines = new THREE.LineSegments(dividerGeometry, dividerMaterial);
-
-  return { ribbonMesh, dividerLines, labels };
+  return { ribbonMesh, dividerObjects, labels };
 }
 
 /**
- * Hide labels on the far side of the spiral (facing away from camera).
- * Respects the ribbonVisible flag from the R key toggle.
+ * Per-frame update: culls labels and divider segments by angular position,
+ * height proximity to camera, and zoom distance. Updates ribbon shader uniforms.
  */
-export function updateRibbonLabels(labels, camera, ribbonVisible) {
+export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible) {
   const camAngle = Math.atan2(camera.position.z, camera.position.x);
+  const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
+  const camY = camera.position.y;
+  const zoomed = camHDist < ZOOM_THRESHOLD;
+
+  // Update ribbon shader uniforms for height + zoom fade
+  const u = ribbonMesh.material.uniforms;
+  u.cameraY.value = camY;
+  u.cameraHDist.value = camHDist;
 
   for (const label of labels) {
-    if (!ribbonVisible) {
+    if (!ribbonVisible || !zoomed || Math.abs(label.userData.y - camY) > HEIGHT_RADIUS) {
       label.visible = false;
       continue;
     }
-
-    const labelAngle = label.userData.angle;
-
-    // Angular difference, wrapped to [-π, π]
-    let diff = labelAngle - camAngle;
+    let diff = label.userData.angle - camAngle;
     if (diff > Math.PI) diff -= 2 * Math.PI;
     if (diff < -Math.PI) diff += 2 * Math.PI;
-
-    // Hide if on the far side (more than 90° from camera's view)
     label.visible = Math.abs(diff) < Math.PI / 2;
+  }
+
+  for (const seg of dividerObjects) {
+    if (!ribbonVisible || !zoomed || Math.abs(seg.userData.y - camY) > HEIGHT_RADIUS) {
+      seg.visible = false;
+      continue;
+    }
+    let diff = seg.userData.angle - camAngle;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    seg.visible = Math.abs(diff) < Math.PI / 2;
   }
 }
