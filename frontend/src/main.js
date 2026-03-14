@@ -20,6 +20,8 @@ import {
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
 } from './three/viewCube.js';
+import * as api from './api.js';
+import { initBeads } from './three/beads.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -160,3 +162,118 @@ window.addEventListener('keydown', (e) => {
     ribbonMesh.visible = ribbonVisible;
   }
 });
+
+// ── Auth gate + entry loading ───────────────────────────────────────────────
+
+async function loadEntries() {
+  const entries = await api.getEntries();
+  initBeads(entries, birthday);
+}
+
+function buildLoginForm() {
+  const overlay = document.createElement('div');
+  Object.assign(overlay.style, {
+    position: 'fixed', inset: '0', zIndex: '1000',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'rgba(0,0,0,0.85)',
+  });
+
+  const form = document.createElement('form');
+  Object.assign(form.style, {
+    display: 'flex', flexDirection: 'column', gap: '12px',
+    padding: '32px', background: '#1a1008', borderRadius: '8px',
+    border: '1px solid rgba(245,166,35,0.3)', minWidth: '280px',
+    fontFamily: 'monospace', color: '#f5a623',
+  });
+
+  const title = document.createElement('div');
+  title.textContent = 'OUROBOROS';
+  Object.assign(title.style, {
+    fontSize: '18px', fontWeight: 'bold', textAlign: 'center',
+    letterSpacing: '4px', marginBottom: '8px',
+  });
+
+  const emailInput    = document.createElement('input');
+  const passwordInput  = document.createElement('input');
+  const birthdayInput  = document.createElement('input');
+  const submitBtn      = document.createElement('button');
+  const toggleLink     = document.createElement('a');
+  const errorDiv       = document.createElement('div');
+
+  for (const input of [emailInput, passwordInput, birthdayInput]) {
+    Object.assign(input.style, {
+      padding: '8px 12px', background: '#0d0804', border: '1px solid rgba(245,166,35,0.3)',
+      borderRadius: '4px', color: '#fff5e6', fontFamily: 'monospace', fontSize: '14px',
+    });
+  }
+  emailInput.type = 'email';       emailInput.placeholder = 'Email';
+  passwordInput.type = 'password'; passwordInput.placeholder = 'Password';
+  birthdayInput.type = 'date';     birthdayInput.placeholder = 'Birthday';
+  birthdayInput.style.display = 'none'; // hidden until register mode
+
+  Object.assign(submitBtn.style, {
+    padding: '10px', background: '#f5a623', color: '#1a1008',
+    border: 'none', borderRadius: '4px', fontFamily: 'monospace',
+    fontSize: '14px', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '2px',
+  });
+  submitBtn.textContent = 'LOGIN';
+
+  Object.assign(toggleLink.style, {
+    color: 'rgba(245,166,35,0.6)', fontSize: '12px', textAlign: 'center',
+    cursor: 'pointer', textDecoration: 'underline',
+  });
+  toggleLink.textContent = 'Need an account? Register';
+
+  Object.assign(errorDiv.style, {
+    color: '#ff6b6b', fontSize: '12px', textAlign: 'center', minHeight: '16px',
+  });
+
+  let isRegister = false;
+  toggleLink.addEventListener('click', () => {
+    isRegister = !isRegister;
+    birthdayInput.style.display = isRegister ? 'block' : 'none';
+    submitBtn.textContent       = isRegister ? 'REGISTER' : 'LOGIN';
+    toggleLink.textContent      = isRegister
+      ? 'Already have an account? Login'
+      : 'Need an account? Register';
+    errorDiv.textContent = '';
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorDiv.textContent = '';
+    try {
+      if (isRegister) {
+        await api.register({
+          email: emailInput.value,
+          password: passwordInput.value,
+          birthday: birthdayInput.value,
+        });
+      }
+      await api.login({
+        email: emailInput.value,
+        password: passwordInput.value,
+      });
+      overlay.remove();
+      await loadEntries();
+    } catch (err) {
+      errorDiv.textContent = err.body?.error || err.message;
+    }
+  });
+
+  form.append(title, emailInput, passwordInput, birthdayInput, submitBtn, errorDiv, toggleLink);
+  overlay.appendChild(form);
+  document.body.appendChild(overlay);
+}
+
+// Check session on load
+(async () => {
+  try {
+    await api.me();
+    await loadEntries();
+  } catch (err) {
+    if (err.status === 401) {
+      buildLoginForm();
+    }
+  }
+})();
