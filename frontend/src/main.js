@@ -22,6 +22,8 @@ import {
 } from './three/viewCube.js';
 import * as api from './api.js';
 import { initBeads } from './three/beads.js';
+import { initEmptyBeads, showEmptyBeadsNearMouse } from './three/emptyBeads.js';
+import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -155,6 +157,18 @@ canvas.addEventListener('click', (e) => {
   }
 });
 
+// ── Empty-bead hover reveal ─────────────────────────────────────────────────
+let lastMouseEvent = null;
+
+window.addEventListener('mousemove', (e) => {
+  lastMouseEvent = e;
+});
+
+registerFrameCallback((cam) => {
+  const mode = getCurrentMode();
+  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode);
+});
+
 // ── Keyboard: ribbon toggle only ────────────────────────────────────────────
 window.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
@@ -165,9 +179,18 @@ window.addEventListener('keydown', (e) => {
 
 // ── Auth gate + entry loading ───────────────────────────────────────────────
 
+let loadedEntries = [];
+
 async function loadEntries() {
-  const entries = await api.getEntries();
-  initBeads(entries, birthday);
+  loadedEntries = await api.getEntries();
+  initBeads(loadedEntries, birthday);
+
+  // Empty beads for all unfilled dates
+  const filledDates = loadedEntries.map(e => e.entry_date);
+  initEmptyBeads(birthday, filledDates);
+
+  // Mood / Category toggle
+  initColorModeToggle(() => toggleColorMode(loadedEntries));
 }
 
 function buildLoginForm() {
