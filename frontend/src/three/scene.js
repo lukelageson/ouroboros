@@ -42,7 +42,7 @@ export function initScene() {
   const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
   const spiralTopY = ((today - birthday) / (DAYS_IN_YEAR * MS_PER_DAY)) * 8;
 
-  const spiral = buildSpiral(birthday, today);
+  const spiral = buildSpiral(birthday, today, spiralTopY);
   scene.add(spiral);
 
   // Ribbon overlay with month/year labels
@@ -51,5 +51,5 @@ export function initScene() {
   for (const seg of dividerObjects) scene.add(seg);
   for (const label of labels) css3dScene.add(label);
 
-  return { ribbonMesh, dividerObjects, labels, spiralTopY };
+  return { ribbonMesh, dividerObjects, labels, spiralTopY, spiral, birthday, today };
 }

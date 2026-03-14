@@ -9,6 +9,7 @@ const container = document.getElementById('app');
 const webgl = new THREE.WebGLRenderer({ antialias: true });
 webgl.setSize(window.innerWidth, window.innerHeight);
 webgl.setPixelRatio(window.devicePixelRatio);
+webgl.localClippingEnabled = true; // required for per-material clipping planes
 container.appendChild(webgl.domElement);
 
 // CSS3D renderer
@@ -29,6 +30,30 @@ const camera = new THREE.PerspectiveCamera(
 );
 camera.position.set(0, 60, 80);
 camera.lookAt(0, 160, 0);
+
+// Orthographic camera — plan view (no vanishing point, infinite focal length)
+// Spiral radius = 40; ORTHO_VIEW_SIZE adds comfortable padding beyond the outermost coil
+const ORTHO_VIEW_SIZE = 55;
+const orthoCamera = new THREE.OrthographicCamera(
+  -ORTHO_VIEW_SIZE * (window.innerWidth / window.innerHeight),
+   ORTHO_VIEW_SIZE * (window.innerWidth / window.innerHeight),
+   ORTHO_VIEW_SIZE,
+  -ORTHO_VIEW_SIZE,
+  0.1,
+  4000
+);
+orthoCamera.up.set(0, 0, -1); // north-up when looking straight down -Y
+
+// Active camera — swapped between perspective and orthographic on mode change
+let activeCamera = camera;
+
+export function setActiveCamera(cam) {
+  activeCamera = cam;
+  controls.object = cam;
+  controls.update();
+}
+
+export function getActiveCamera() { return activeCamera; }
 
 // Scenes
 const scene = new THREE.Scene();
@@ -61,8 +86,15 @@ export function registerPanel(panel, anchorPosition) {
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
   const h = window.innerHeight;
-  camera.aspect = w / h;
+  const aspect = w / h;
+
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
+
+  orthoCamera.left   = -ORTHO_VIEW_SIZE * aspect;
+  orthoCamera.right  =  ORTHO_VIEW_SIZE * aspect;
+  orthoCamera.updateProjectionMatrix();
+
   webgl.setSize(w, h);
   css3d.setSize(w, h);
 });
@@ -77,20 +109,20 @@ function animate() {
 
   // Update panel positions each frame
   for (const { panel, anchorPosition } of activePanels) {
-    positionPanelFacingCamera(panel, anchorPosition, camera);
+    positionPanelFacingCamera(panel, anchorPosition, activeCamera);
   }
 
   // Run registered frame callbacks
   for (const fn of frameCallbacks) {
-    fn(camera);
+    fn(activeCamera);
   }
 
-  webgl.render(scene, camera);
-  css3d.render(css3dScene, camera);
+  webgl.render(scene, activeCamera);
+  css3d.render(css3dScene, activeCamera);
 }
 
 export function initRenderer() {
   animate();
 }
 
-export { webgl, css3d, camera, scene, css3dScene, controls };
+export { webgl, css3d, camera, orthoCamera, scene, css3dScene, controls };

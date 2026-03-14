@@ -1,19 +1,19 @@
 import * as THREE from 'three';
 import { dateToPosition } from './spiralMath.js';
 
-const MS_PER_DAY = 86400000;
+// Reference to the compiled shader — updated by onBeforeCompile, read by updateSpiralMaterial.
+let spiralShader = null;
 
 /**
- * Builds an Archimedean spiral mesh from birthday to today.
- * Returns a THREE.Mesh using TubeGeometry with emissive amber material.
+ * Builds the spiral mesh from birthday to today.
+ * spiralTopY is passed so the plan-view Y-fade uniform is correctly scaled.
  */
-export function buildSpiral(birthday, today) {
+export function buildSpiral(birthday, today, spiralTopY) {
   const b = new Date(birthday);
   const t = new Date(today);
   const totalMs = t - b;
   const numPoints = 2000;
 
-  // Generate points along the spiral
   const points = [];
   for (let i = 0; i <= numPoints; i++) {
     const fraction = i / numPoints;
@@ -21,23 +21,62 @@ export function buildSpiral(birthday, today) {
     points.push(dateToPosition(date, birthday));
   }
 
-  // Create a smooth curve through the points
   const curve = new THREE.CatmullRomCurve3(points);
-
-  // TubeGeometry: path, tubular segments, radius, radial segments, closed
   const geometry = new THREE.TubeGeometry(curve, numPoints, 0.15, 8, false);
 
+  // Warm white — replaces the previous amber/orange
   const material = new THREE.MeshStandardMaterial({
-    color: 0x1a0e04,
-    emissive: 0xf5a623,
-    emissiveIntensity: 0.4,
-    metalness: 0.3,
-    roughness: 0.6,
+    color:             0xfff5e6, // warm white
+    emissive:          0xffecd4, // soft warm emissive
+    emissiveIntensity: 0.35,
+    metalness:         0.3,
+    roughness:         0.55,
+    transparent:       true,    // required for alpha fade in plan view
   });
+
+  // Inject a world-Y varying and a plan-mode alpha fade into the standard shader.
+  // uPlanMode 0→normal, 1→fade older coils to ~10% at Y=0.
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSpiralTopY = { value: spiralTopY };
+    shader.uniforms.uPlanMode   = { value: 0.0 };
+    spiralShader = shader;
+
+    // Vertex: pass world Y to fragment shader
+    shader.vertexShader = 'varying float vWorldY;\n' +
+      shader.vertexShader.replace(
+        '#include <fog_vertex>',
+        `#include <fog_vertex>
+         vWorldY = (modelMatrix * vec4(position, 1.0)).y;`
+      );
+
+    // Fragment: apply Y-based alpha when in plan mode
+    shader.fragmentShader =
+      `uniform float uSpiralTopY;
+       uniform float uPlanMode;
+       varying float vWorldY;\n` +
+      shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+         if (uPlanMode > 0.5) {
+           float yFade = clamp(vWorldY / uSpiralTopY, 0.0, 1.0);
+           gl_FragColor.a *= mix(0.1, 1.0, yFade);
+         }`
+      );
+  };
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
 
   return mesh;
+}
+
+/**
+ * Call once per frame to toggle the plan-view Y-fade on the spiral.
+ * planMode — true while in (or transitioning to) plan view.
+ */
+export function updateSpiralMaterial(planMode) {
+  if (spiralShader) {
+    spiralShader.uniforms.uPlanMode.value = planMode ? 1.0 : 0.0;
+  }
 }

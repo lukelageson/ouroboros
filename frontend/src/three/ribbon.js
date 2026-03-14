@@ -80,7 +80,7 @@ export function buildRibbon(birthday, today) {
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
 
-  // ShaderMaterial: fades ribbon by height-proximity and zoom-distance
+  // ShaderMaterial: fades ribbon by height-proximity and zoom-distance.
   const ribbonMaterial = new THREE.ShaderMaterial({
     uniforms: {
       baseColor:      { value: new THREE.Color(0xfff5e6) },
@@ -92,13 +92,17 @@ export function buildRibbon(birthday, today) {
     },
     vertexShader: `
       varying vec3 vWorldPos;
+      #include <clipping_planes_pars_vertex>
       void main() {
-        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vec4 worldPos   = modelMatrix    * vec4(position, 1.0);
         vWorldPos = worldPos.xyz;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <clipping_planes_vertex>
       }
     `,
     fragmentShader: `
+      #include <clipping_planes_pars_fragment>
       uniform vec3  baseColor;
       uniform float baseOpacity;
       uniform float cameraY;
@@ -107,6 +111,7 @@ export function buildRibbon(birthday, today) {
       uniform float zoomThreshold;
       varying vec3  vWorldPos;
       void main() {
+        #include <clipping_planes_fragment>
         float yDist  = abs(vWorldPos.y - cameraY);
         float yAlpha = 1.0 - smoothstep(heightRadius * 0.6, heightRadius, yDist);
         float zAlpha = 1.0 - smoothstep(zoomThreshold * 0.7, zoomThreshold, cameraHDist);
@@ -161,42 +166,43 @@ export function buildRibbon(birthday, today) {
 
     // Label — placed at midpoint of month segment (half-month after boundary)
     const nextCursor = new Date(year, month + 1, 1);
-    const midDate = new Date((cursor.getTime() + nextCursor.getTime()) / 2);
-    const midAngle = dateToAngle(midDate);
-    const pos = ribbonPosition(midDate, birthday);
+    const midDate    = new Date((cursor.getTime() + nextCursor.getTime()) / 2);
+    const midAngle   = dateToAngle(midDate);
+    const pos        = ribbonPosition(midDate, birthday);
 
-    const div = document.createElement('div');
-    div.style.fontFamily = 'sans-serif';
-    div.style.pointerEvents = 'none';
-    div.style.whiteSpace = 'nowrap';
-
-    if (isYearBoundary) {
-      div.textContent = String(year);
-      div.style.fontSize = '13px';
-      div.style.color = 'rgba(255,245,230,0.9)';
-    } else {
-      div.textContent = MONTH_NAMES[month].toUpperCase();
-      div.style.fontSize = '50px';
-      div.style.color = 'rgba(255,245,230,0.12)';
-    }
-
-    const label = new CSS3DObject(div);
-    label.position.copy(pos);
-    label.scale.setScalar(0.05);
-
-    // 180° in-plane rotation so text reads from outside the spiral.
-    // Flip both tangent (right) and outward (up); normal (yUp) stays.
+    // Shared orientation matrix (reads from outside the spiral)
     const tangent = new THREE.Vector3(Math.sin(midAngle), 0, -Math.cos(midAngle));
     const outward = new THREE.Vector3(-Math.cos(midAngle), 0, -Math.sin(midAngle));
-    const yUp = new THREE.Vector3(0, 1, 0);
+    const yUp     = new THREE.Vector3(0, 1, 0);
+    const rotMat  = new THREE.Matrix4().makeBasis(tangent, outward, yUp);
 
-    const m = new THREE.Matrix4();
-    m.makeBasis(tangent, outward, yUp);
-    label.quaternion.setFromRotationMatrix(m);
+    function makeLabel(text, fontSize, color, isYearBnd) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      div.style.fontFamily   = 'sans-serif';
+      div.style.pointerEvents = 'none';
+      div.style.whiteSpace   = 'nowrap';
+      div.style.fontSize     = fontSize;
+      div.style.color        = color;
 
-    label.userData.angle = midAngle;
-    label.userData.y = pos.y;
-    labels.push(label);
+      const lbl = new CSS3DObject(div);
+      lbl.position.copy(pos);
+      lbl.scale.setScalar(0.05);
+      lbl.quaternion.setFromRotationMatrix(rotMat);
+      lbl.userData.angle          = midAngle;
+      lbl.userData.y              = pos.y;
+      lbl.userData.month          = month; // 0–11, used for plan-view deduplication
+      lbl.userData.isYearBoundary = isYearBnd;
+      return lbl;
+    }
+
+    // Always create a month-abbreviation label (never hidden by isYearBoundary filter)
+    labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,245,230,0.12)', false));
+
+    // For January boundaries also create a year-number label (hidden in plan view)
+    if (isYearBoundary) {
+      labels.push(makeLabel(String(year), '13px', 'rgba(255,245,230,0.9)', true));
+    }
 
     cursor = nextCursor;
   }
@@ -207,37 +213,72 @@ export function buildRibbon(birthday, today) {
 /**
  * Per-frame update: culls labels and divider segments by angular position,
  * height proximity to camera, and zoom distance. Updates ribbon shader uniforms.
+ *
+ * planMode    — true while in (or transitioning to) plan view.
+ *               Removes angular + height culling; shows only the current year's coil.
+ * spiralTopY  — Y coordinate of the topmost coil; used to anchor plan-view visibility.
  */
-export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible) {
-  const camAngle = Math.atan2(camera.position.z, camera.position.x);
-  const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
-  const camY = camera.position.y;
-  const zoomed = camHDist < ZOOM_THRESHOLD;
-
-  // Update ribbon shader uniforms for height + zoom fade
+export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY) {
   const u = ribbonMesh.material.uniforms;
-  u.cameraY.value = camY;
-  u.cameraHDist.value = camHDist;
 
-  for (const label of labels) {
-    if (!ribbonVisible || !zoomed || Math.abs(label.userData.y - camY) > HEIGHT_RADIUS) {
-      label.visible = false;
-      continue;
-    }
-    let diff = label.userData.angle - camAngle;
-    if (diff > Math.PI) diff -= 2 * Math.PI;
-    if (diff < -Math.PI) diff += 2 * Math.PI;
-    label.visible = Math.abs(diff) < Math.PI / 2;
-  }
+  if (planMode) {
+    // Tight ribbon shader window: one year centred just below the top coil.
+    // heightRadius=6 → fully visible from spiralTopY-7.6 to spiralTopY+0.4; fades beyond.
+    u.cameraY.value      = spiralTopY - 4;
+    u.cameraHDist.value  = 0;
+    u.heightRadius.value = 6;
 
-  for (const seg of dividerObjects) {
-    if (!ribbonVisible || !zoomed || Math.abs(seg.userData.y - camY) > HEIGHT_RADIUS) {
-      seg.visible = false;
-      continue;
+    // Deduplicate month labels: keep only the MOST RECENT label for each month (0–11).
+    // This eliminates the double-March problem and guarantees exactly 12 visible labels.
+    // Year-boundary labels (year numbers) are always hidden in plan view.
+    const latestByMonth = new Map(); // month → label with highest y
+    for (const label of labels) {
+      if (label.userData.isYearBoundary) continue;
+      const m = label.userData.month;
+      if (!latestByMonth.has(m) || label.userData.y > latestByMonth.get(m).userData.y) {
+        latestByMonth.set(m, label);
+      }
     }
-    let diff = seg.userData.angle - camAngle;
-    if (diff > Math.PI) diff -= 2 * Math.PI;
-    if (diff < -Math.PI) diff += 2 * Math.PI;
-    seg.visible = Math.abs(diff) < Math.PI / 2;
+    const latestSet = new Set(latestByMonth.values());
+
+    for (const label of labels) {
+      label.visible = ribbonVisible && latestSet.has(label);
+    }
+    for (const seg of dividerObjects) {
+      seg.visible = ribbonVisible && seg.userData.y >= spiralTopY - 8;
+    }
+
+  } else {
+    // Perspective mode: full proximity + angular culling
+    const camAngle = Math.atan2(camera.position.z, camera.position.x);
+    const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
+    const camY     = camera.position.y;
+    const zoomed   = camHDist < ZOOM_THRESHOLD;
+
+    u.cameraY.value      = camY;
+    u.cameraHDist.value  = camHDist;
+    u.heightRadius.value = HEIGHT_RADIUS;
+
+    for (const label of labels) {
+      if (!ribbonVisible || !zoomed || Math.abs(label.userData.y - camY) > HEIGHT_RADIUS) {
+        label.visible = false;
+        continue;
+      }
+      let diff = label.userData.angle - camAngle;
+      if (diff > Math.PI)  diff -= 2 * Math.PI;
+      if (diff < -Math.PI) diff += 2 * Math.PI;
+      label.visible = Math.abs(diff) < Math.PI / 2;
+    }
+
+    for (const seg of dividerObjects) {
+      if (!ribbonVisible || !zoomed || Math.abs(seg.userData.y - camY) > HEIGHT_RADIUS) {
+        seg.visible = false;
+        continue;
+      }
+      let diff = seg.userData.angle - camAngle;
+      if (diff > Math.PI)  diff -= 2 * Math.PI;
+      if (diff < -Math.PI) diff += 2 * Math.PI;
+      seg.visible = Math.abs(diff) < Math.PI / 2;
+    }
   }
 }
