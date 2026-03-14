@@ -75,6 +75,13 @@ export function registerFrameCallback(fn) {
   frameCallbacks.push(fn);
 }
 
+// Post-render callbacks (e.g. view cube overlay)
+const postRenderCallbacks = [];
+
+export function registerPostRenderCallback(fn) {
+  postRenderCallbacks.push(fn);
+}
+
 // Panel tracking: array of { panel, anchorPosition }
 const activePanels = [];
 
@@ -118,6 +125,12 @@ function animate() {
   }
 
   webgl.render(scene, activeCamera);
+
+  // Post-render overlays (view cube, etc.)
+  for (const fn of postRenderCallbacks) {
+    fn(activeCamera);
+  }
+
   css3d.render(css3dScene, activeCamera);
 }
 

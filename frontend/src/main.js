@@ -1,4 +1,8 @@
-import { initRenderer, registerFrameCallback } from './three/renderer.js';
+import * as THREE from 'three';
+import {
+  initRenderer, registerFrameCallback, registerPostRenderCallback,
+  webgl, camera, controls, scene,
+} from './three/renderer.js';
 import { initScene }                           from './three/scene.js';
 import { updateRibbonLabels }                  from './three/ribbon.js';
 import {
@@ -13,6 +17,9 @@ import {
   showSectionCutSlider,
   hideSectionCutSlider,
 } from './three/sectionCut.js';
+import {
+  initViewCube, updateViewCube, renderViewCube, isInCubeArea,
+} from './three/viewCube.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -31,10 +38,21 @@ const todayPos = dateToPosition(today, birthday);
 initSectionCut(spiralTopY, birthday);
 hideSectionCutSlider(); // hidden until perspective view is active
 
+// ── View Cube ───────────────────────────────────────────────────────────────
+initViewCube(webgl, camera, controls, (mode) => {
+  if (mode === 'detail') {
+    panDate = new Date(today);
+    setViewMode('detail', spiralTopY, { panPos: todayPos });
+  } else {
+    setViewMode(mode, spiralTopY);
+  }
+});
+
 // ── Frame callbacks ─────────────────────────────────────────────────────────
 registerFrameCallback(() => {
   advanceTransition();
   updateSpiralMaterial(isPlanMode());
+  updateViewCube();
 
   // Show / hide section-cut slider based on settled view mode
   const mode = getCurrentMode();
@@ -42,12 +60,16 @@ registerFrameCallback(() => {
   else                        hideSectionCutSlider();
 });
 
-registerFrameCallback((camera) => {
+registerFrameCallback((cam) => {
   updateRibbonLabels(
     labels, dividerObjects, ribbonMesh,
-    camera, ribbonVisible,
+    cam, ribbonVisible,
     isPlanMode(), spiralTopY
   );
+});
+
+registerPostRenderCallback(() => {
+  renderViewCube();
 });
 
 // ── Start in Plan View ───────────────────────────────────────────────────────
@@ -88,19 +110,51 @@ window.addEventListener('mouseup', () => {
   }
 });
 
-// ── Keyboard controls ────────────────────────────────────────────────────────
-window.addEventListener('keydown', (e) => {
-  if (e.key === '1') {
+// ── Surface-click navigation ────────────────────────────────────────────────
+// Perspective view: click near spiral top → plan
+// Plan view:        click near centre     → perspective
+
+const surfaceRaycaster = new THREE.Raycaster();
+const surfaceMouse     = new THREE.Vector2();
+let   clickDownPos     = null;
+
+canvas.addEventListener('mousedown', (e) => {
+  clickDownPos = { x: e.clientX, y: e.clientY };
+});
+
+canvas.addEventListener('click', (e) => {
+  // Ignore drags (moved > 5 px)
+  if (clickDownPos &&
+      Math.hypot(e.clientX - clickDownPos.x, e.clientY - clickDownPos.y) > 5) return;
+
+  // Ignore clicks in the view-cube area
+  if (isInCubeArea(e.clientX, e.clientY)) return;
+
+  const mode = getCurrentMode();
+  if (mode !== 'perspective' && mode !== 'plan') return;
+
+  // Build NDC from click position
+  surfaceMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+  surfaceMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  surfaceRaycaster.setFromCamera(surfaceMouse, camera);
+
+  const hits = surfaceRaycaster.intersectObject(spiral, false);
+
+  if (mode === 'perspective' && hits.length && hits[0].point.y > spiralTopY - 16) {
+    // Clicked near the top of the spiral → switch to plan
     setViewMode('plan', spiralTopY);
+  } else if (mode === 'plan') {
+    // Click inside the spiral hole (near viewport centre) → perspective
+    const cx = window.innerWidth  / 2;
+    const cy = window.innerHeight / 2;
+    if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
+      setViewMode('perspective', spiralTopY);
+    }
   }
-  if (e.key === '2') {
-    setViewMode('perspective', spiralTopY);
-  }
-  if (e.key === '3') {
-    // Reset pan to today, then enter detail view
-    panDate = new Date(today);
-    setViewMode('detail', spiralTopY, { panPos: todayPos });
-  }
+});
+
+// ── Keyboard: ribbon toggle only ────────────────────────────────────────────
+window.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
     ribbonVisible = !ribbonVisible;
     ribbonMesh.visible = ribbonVisible;
