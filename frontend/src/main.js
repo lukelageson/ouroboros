@@ -43,8 +43,10 @@ import {
 import {
   initRingStack, expandStack, collapseStack, updateRingStack,
   getRingMeshes, handleRingClick, isExpanded, getStackGroup,
-  updateProgress,
+  updateProgress, addCompletedRing, setRingComputing,
 } from './three/analysisRings.js';
+import { runParticleRain } from './three/particleRain.js';
+import { getBeadMesh } from './three/beads.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -320,6 +322,33 @@ function _openCreateForInstance(instanceId) {
   });
 }
 
+// ── Brief floating message ──────────────────────────────────────────────────
+function _showBriefMessage(text) {
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'fixed',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    zIndex: '200',
+    fontFamily: 'monospace',
+    fontSize: '14px',
+    letterSpacing: '2px',
+    color: '#f5a623',
+    background: 'rgba(26,16,8,0.9)',
+    border: '1px solid rgba(245,166,35,0.3)',
+    borderRadius: '6px',
+    padding: '16px 28px',
+    pointerEvents: 'none',
+    opacity: '1',
+    transition: 'opacity 0.5s ease',
+  });
+  el.textContent = text;
+  document.getElementById('app').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; }, 2500);
+  setTimeout(() => { el.remove(); }, 3000);
+}
+
 // ── Empty-bead hover reveal ─────────────────────────────────────────────────
 let lastMouseEvent = null;
 
@@ -359,8 +388,51 @@ async function loadEntries() {
   try {
     const analyses = await api.getAnalyses();
     initRingStack(spiralTopY, analyses, loadedEntries, {
-      onTriggerAnalyze: (category) => {
-        console.log('[ring] Trigger analyze:', category); // Prompt 7.2
+      onTriggerAnalyze: async (category) => {
+        // Ring enters computing state (pulsating)
+        setRingComputing(category, true);
+
+        try {
+          const result = await api.analyze({ category });
+
+          setRingComputing(category, false);
+
+          // Insufficient data
+          if (result.insufficient) {
+            _showBriefMessage(result.reason || 'Not enough data yet');
+            return;
+          }
+
+          // Success — mark ring completed
+          addCompletedRing(result);
+
+          // Gather target bead positions and meshes from entry_ids
+          const targetPositions = [];
+          const targetMeshes = [];
+          if (result.entry_ids && result.entry_ids.length) {
+            for (const entryId of result.entry_ids) {
+              const mesh = getBeadMesh(entryId);
+              if (mesh) {
+                targetPositions.push(mesh.position.clone());
+                targetMeshes.push(mesh);
+              }
+            }
+          }
+
+          // Ring position for particle source
+          const ringGroup = getStackGroup();
+          const ringY = ringGroup ? ringGroup.position.y + spiralTopY + 20 : spiralTopY + 20;
+          const sourcePos = new THREE.Vector3(0, spiralTopY + 20, 0);
+
+          // Run particle rain to target beads
+          runParticleRain(sourcePos, targetPositions, targetMeshes, () => {
+            console.log('[ring] Analysis complete, beads glowing:', category);
+          });
+        } catch (err) {
+          console.error('[ring] Analyze failed:', err);
+          setRingComputing(category, false);
+          _showBriefMessage('Analysis failed — please try again');
+        }
       },
       onViewAnalysis: (analysis) => {
         console.log('[ring] View analysis:', analysis);   // Prompt 7.3

@@ -40,3 +40,6 @@ export const createEntry = (data) => request('POST', '/entries', data);
 export const getAnalyses    = ()     => request('GET',    '/analyses');
 export const createAnalysis = (data) => request('POST',   '/analyses', data);
 export const deleteAnalysis = (id)   => request('DELETE', `/analyses/${id}`);
+
+// ── Analyze (AI) ────────────────────────────────────────────────────────────
+export const analyze = (data) => request('POST', '/analyze', data);

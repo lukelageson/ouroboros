@@ -7,6 +7,7 @@ const sessionMiddleware = require('./middleware/session');
 const authRoutes = require('./routes/auth');
 const entriesRoutes = require('./routes/entries');
 const analysesRoutes = require('./routes/analyses');
+const analyzeRoutes = require('./routes/analyze');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +23,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/entries', entriesRoutes);
 app.use('/api/analyses', analysesRoutes);
+app.use('/api/analyze', analyzeRoutes);
 
 app.listen(PORT, () => {
   console.log(`Ouroboros backend running on port ${PORT}`);
