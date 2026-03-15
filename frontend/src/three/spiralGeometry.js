@@ -4,6 +4,19 @@ import { dateToPosition } from './spiralMath.js';
 // Reference to the compiled shader — updated by onBeforeCompile, read by updateSpiralMaterial.
 let spiralShader = null;
 
+/** Switch the spiral into detail-mode edge-fade around targetY. */
+export function updateSpiralDetailMode(targetY) {
+  if (spiralShader) {
+    spiralShader.uniforms.uDetailMode.value    = 1.0;
+    spiralShader.uniforms.uDetailTargetY.value = targetY;
+  }
+}
+
+/** Clear detail-mode edge-fade. */
+export function clearSpiralDetailMode() {
+  if (spiralShader) spiralShader.uniforms.uDetailMode.value = 0.0;
+}
+
 /**
  * Builds the spiral mesh from birthday to today.
  * spiralTopY is passed so the plan-view Y-fade uniform is correctly scaled.
@@ -37,8 +50,10 @@ export function buildSpiral(birthday, today, spiralTopY) {
   // Inject a world-Y varying and a plan-mode alpha fade into the standard shader.
   // uPlanMode 0→normal, 1→fade older coils to ~10% at Y=0.
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uSpiralTopY = { value: spiralTopY };
-    shader.uniforms.uPlanMode   = { value: 0.0 };
+    shader.uniforms.uSpiralTopY    = { value: spiralTopY };
+    shader.uniforms.uPlanMode      = { value: 0.0 };
+    shader.uniforms.uDetailMode    = { value: 0.0 };
+    shader.uniforms.uDetailTargetY = { value: 0.0 };
     spiralShader = shader;
 
     // Vertex: pass world Y to fragment shader
@@ -49,10 +64,12 @@ export function buildSpiral(birthday, today, spiralTopY) {
          vWorldY = (modelMatrix * vec4(position, 1.0)).y;`
       );
 
-    // Fragment: apply Y-based alpha when in plan mode
+    // Fragment: plan-mode fade + detail-mode edge softening
     shader.fragmentShader =
       `uniform float uSpiralTopY;
        uniform float uPlanMode;
+       uniform float uDetailMode;
+       uniform float uDetailTargetY;
        varying float vWorldY;\n` +
       shader.fragmentShader.replace(
         '#include <dithering_fragment>',
@@ -60,6 +77,13 @@ export function buildSpiral(birthday, today, spiralTopY) {
          if (uPlanMode > 0.5) {
            float yFade = clamp(vWorldY / uSpiralTopY, 0.0, 1.0);
            gl_FragColor.a *= mix(0.1, 1.0, yFade);
+         }
+         if (uDetailMode > 0.5) {
+           float upperY = uDetailTargetY + 5.0;
+           float lowerY = uDetailTargetY - 8.0;
+           float upperFade = 1.0 - smoothstep(upperY - 2.5, upperY, vWorldY);
+           float lowerFade = smoothstep(lowerY, lowerY + 2.5, vWorldY);
+           gl_FragColor.a *= upperFade * lowerFade;
          }`
       );
   };

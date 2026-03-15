@@ -17,8 +17,9 @@ import { webgl } from './renderer.js';
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY   = 86400000;
 
-let clipPlane       = null;
-let detailLowerPlane = null; // second plane used in detail view: y >= lowerY
+let clipPlane        = null;
+let detailUpperPlane = null; // detail view: y <= targetY + 5
+let detailLowerPlane = null; // detail view: y >= targetY - 8
 let birthdayDate    = null;
 let sliderEl        = null;
 let labelEl         = null;
@@ -67,23 +68,29 @@ export function getSectionCutY() {
 }
 
 /**
- * Add a lower clip plane for detail view, hiding everything below camY - halfHeight.
+ * Replace the global clip planes with a tight two-plane window around targetY.
+ * Shows: targetY - 8  <=  y  <=  targetY + 5
  * Called each frame while in detail mode.
+ * @param {number} targetY  world-Y of the spiral point the camera is centred on
  */
-export function setDetailClipWindow(camY, halfHeight = 22) {
-  const lowerY = camY - halfHeight;
-  if (!detailLowerPlane) {
-    detailLowerPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -lowerY);
-    webgl.clippingPlanes = clipPlane ? [clipPlane, detailLowerPlane] : [detailLowerPlane];
+export function setDetailClipWindow(targetY) {
+  const upperY = targetY + 5;
+  const lowerY = targetY - 8;
+  if (!detailUpperPlane) {
+    detailUpperPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0),  upperY);
+    detailLowerPlane = new THREE.Plane(new THREE.Vector3(0,  1, 0), -lowerY);
+    webgl.clippingPlanes = [detailUpperPlane, detailLowerPlane];
   } else {
+    detailUpperPlane.constant =  upperY;
     detailLowerPlane.constant = -lowerY;
   }
 }
 
-/** Remove the detail-view lower clip plane (call when leaving detail view). */
+/** Restore the global section-cut plane (call when leaving detail view). */
 export function clearDetailClipWindow() {
-  if (detailLowerPlane) {
+  if (detailUpperPlane || detailLowerPlane) {
     webgl.clippingPlanes = clipPlane ? [clipPlane] : [];
+    detailUpperPlane = null;
     detailLowerPlane = null;
   }
 }

@@ -10,7 +10,9 @@ import {
   isPlanMode, isDetailMode, getCurrentMode,
   panDetailView, setPlanTargetY,
 } from './three/cameraController.js';
-import { updateSpiralMaterial } from './three/spiralGeometry.js';
+import {
+  updateSpiralMaterial, updateSpiralDetailMode, clearSpiralDetailMode,
+} from './three/spiralGeometry.js';
 import { dateToPosition }       from './three/spiralMath.js';
 import {
   initSectionCut,
@@ -78,11 +80,16 @@ registerFrameCallback(() => {
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
 
-  // Detail view: lower clip plane + panel mode
+  // Detail view: two-plane clip window + spiral edge fade + year indicator
   if (mode === 'detail') {
-    setDetailClipWindow(getActiveCamera().position.y);
+    const detailTargetY = getActiveCamera().position.y - 15;
+    setDetailClipWindow(detailTargetY);
+    updateSpiralDetailMode(detailTargetY);
+    _updateDetailYearIndicator(detailTargetY);
   } else {
     clearDetailClipWindow();
+    clearSpiralDetailMode();
+    _hideDetailYearIndicator();
   }
 
   // Tell panelManager the settled view mode so it scales/orients popups correctly
@@ -93,7 +100,7 @@ registerFrameCallback((cam) => {
   updateRibbonLabels(
     labels, dividerObjects, ribbonMesh,
     cam, ribbonVisible,
-    isPlanMode(), spiralTopY, getSectionCutY()
+    isPlanMode(), spiralTopY, getSectionCutY(), isDetailMode()
   );
 });
 
@@ -220,6 +227,44 @@ canvas.addEventListener('click', (e) => {
     }
   }
 });
+
+// ── Detail-view year indicator ───────────────────────────────────────────────
+let _yearIndicatorEl = null;
+
+function _getOrCreateYearIndicator() {
+  if (_yearIndicatorEl) return _yearIndicatorEl;
+  _yearIndicatorEl = document.createElement('div');
+  Object.assign(_yearIndicatorEl.style, {
+    position:      'fixed',
+    bottom:        '24px',
+    left:          '50%',
+    transform:     'translateX(-50%)',
+    zIndex:        '100',
+    fontFamily:    'monospace',
+    fontSize:      '13px',
+    letterSpacing: '3px',
+    color:         'rgba(255,245,230,0.7)',
+    pointerEvents: 'none',
+    display:       'none',
+  });
+  document.getElementById('app').appendChild(_yearIndicatorEl);
+  return _yearIndicatorEl;
+}
+
+function _updateDetailYearIndicator(targetY) {
+  const el = _getOrCreateYearIndicator();
+  const yearsElapsed = targetY / 8;
+  const DAYS_IN_YEAR = 365.25;
+  const MS_PER_DAY   = 86400000;
+  const d = new Date(birthday.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
+  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  el.textContent = `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+  el.style.display = 'block';
+}
+
+function _hideDetailYearIndicator() {
+  if (_yearIndicatorEl) _yearIndicatorEl.style.display = 'none';
+}
 
 /** Helper: open the create panel for a given empty-bead instance. */
 function _openCreateForInstance(instanceId) {

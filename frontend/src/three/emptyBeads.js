@@ -145,7 +145,7 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
       let angDiff = Math.atan2(p.z, p.x) - camAngle;
       if (angDiff >  Math.PI) angDiff -= 2 * Math.PI;
       if (angDiff < -Math.PI) angDiff += 2 * Math.PI;
-      arr[i] = (dy < 10 && Math.abs(angDiff) < 1.0) ? 0.55 : 0;
+      arr[i] = (dy < 8 && Math.abs(angDiff) < 1.0) ? 0.55 : 0;
     }
     opacityAttr.needsUpdate = true;
     return;

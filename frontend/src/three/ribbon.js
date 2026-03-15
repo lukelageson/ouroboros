@@ -219,10 +219,41 @@ export function buildRibbon(birthday, today) {
  * spiralTopY  — Y coordinate of the topmost coil; used to anchor plan-view visibility.
  */
 /**
- * @param {number} clipY  current section-cut Y (defaults to spiralTopY = no cut)
+ * @param {number} clipY      current section-cut Y (defaults to spiralTopY = no cut)
+ * @param {boolean} detailMode  true while in (or transitioning to) detail view
  */
-export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY, clipY = spiralTopY) {
+export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY, clipY = spiralTopY, detailMode = false) {
   const u = ribbonMesh.material.uniforms;
+
+  if (detailMode) {
+    // Detail view: tight 1-year ribbon window around the camera target point
+    const targetY  = camera.position.y - 15;
+    const camAngle = Math.atan2(camera.position.z, camera.position.x);
+
+    u.cameraY.value      = targetY;
+    u.cameraHDist.value  = 0;
+    u.heightRadius.value = 6;
+
+    for (const label of labels) {
+      if (!ribbonVisible || Math.abs(label.userData.y - targetY) > 8) {
+        label.visible = false; continue;
+      }
+      let diff = label.userData.angle - camAngle;
+      if (diff >  Math.PI) diff -= 2 * Math.PI;
+      if (diff < -Math.PI) diff += 2 * Math.PI;
+      label.visible = Math.abs(diff) < Math.PI / 2;
+    }
+    for (const seg of dividerObjects) {
+      if (!ribbonVisible || Math.abs(seg.userData.y - targetY) > 8) {
+        seg.visible = false; continue;
+      }
+      let diff = seg.userData.angle - camAngle;
+      if (diff >  Math.PI) diff -= 2 * Math.PI;
+      if (diff < -Math.PI) diff += 2 * Math.PI;
+      seg.visible = Math.abs(diff) < Math.PI / 2;
+    }
+    return;
+  }
 
   if (planMode) {
     // Tight ribbon shader window centred just below the section cut.
