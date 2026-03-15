@@ -40,6 +40,11 @@ import {
 import {
   initTodaysBubble, dismissTodaysBubble,
 } from './three/todaysBubble.js';
+import {
+  initRingStack, expandStack, collapseStack, updateRingStack,
+  getRingMeshes, handleRingClick, isExpanded, getStackGroup,
+  updateProgress,
+} from './three/analysisRings.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -99,6 +104,13 @@ registerFrameCallback(() => {
 
   // Tell panelManager the settled view mode so it scales/orients popups correctly
   setPanelViewMode(mode || 'perspective');
+
+  // Ring stack: only visible in perspective view, animate each frame
+  const ringGroup = getStackGroup();
+  if (ringGroup) {
+    ringGroup.visible = (mode === 'perspective');
+  }
+  updateRingStack(performance.now() / 1000);
 });
 
 registerFrameCallback((cam) => {
@@ -176,6 +188,23 @@ canvas.addEventListener('click', (e) => {
   clickMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
   const activeCam = getActiveCamera();
   clickRaycaster.setFromCamera(clickMouse, activeCam);
+
+  // ── 0. Check analysis rings (perspective only) ──────────────────────
+  if (mode === 'perspective') {
+    const ringMeshes = getRingMeshes();
+    if (ringMeshes.length) {
+      const ringHits = clickRaycaster.intersectObjects(ringMeshes, false);
+      if (ringHits.length) {
+        if (handleRingClick(ringHits[0].object)) return;
+      }
+    }
+
+    // Click outside expanded stack → collapse
+    if (isExpanded()) {
+      collapseStack();
+      return;
+    }
+  }
 
   // ── 1. Check filled beads ────────────────────────────────────────────
   const beadMeshes = getAllBeadMeshes();
@@ -283,6 +312,7 @@ function _openCreateForInstance(instanceId) {
       loadedEntries.push(newEntry);
       addBead(newEntry, birthday);
       removeEmptyBeadInstance(instanceId);
+      updateProgress(loadedEntries);
       closeCreatePanel();
     } catch (err) {
       console.error('Failed to create entry:', err);
@@ -325,12 +355,30 @@ async function loadEntries() {
   // Mood / Category toggle
   initColorModeToggle(() => toggleColorMode(loadedEntries));
 
+  // Analysis ring stack
+  try {
+    const analyses = await api.getAnalyses();
+    initRingStack(spiralTopY, analyses, loadedEntries, {
+      onTriggerAnalyze: (category) => {
+        console.log('[ring] Trigger analyze:', category); // Prompt 7.2
+      },
+      onViewAnalysis: (analysis) => {
+        console.log('[ring] View analysis:', analysis);   // Prompt 7.3
+      },
+    });
+  } catch (err) {
+    console.error('Failed to load analyses:', err);
+    // Initialize without completed analyses
+    initRingStack(spiralTopY, [], loadedEntries);
+  }
+
   // Today's bubble: amber glow + create panel if no entry for today
   initTodaysBubble(birthday, loadedEntries, async (data) => {
     try {
       const newEntry = await api.createEntry(data);
       loadedEntries.push(newEntry);
       addBead(newEntry, birthday);
+      updateProgress(loadedEntries);
       // Find and hide the matching empty bead instance
       const emptyMesh = getEmptyBeadMesh();
       if (emptyMesh) {
