@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   initRenderer, registerFrameCallback, registerPostRenderCallback,
-  webgl, camera, controls, scene,
+  webgl, camera, controls, scene, getActiveCamera,
 } from './three/renderer.js';
 import { initScene }                           from './three/scene.js';
 import { updateRibbonLabels }                  from './three/ribbon.js';
@@ -21,9 +21,16 @@ import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
 } from './three/viewCube.js';
 import * as api from './api.js';
-import { initBeads } from './three/beads.js';
-import { initEmptyBeads, showEmptyBeadsNearMouse } from './three/emptyBeads.js';
+import { initBeads, addBead, getAllBeadMeshes } from './three/beads.js';
+import {
+  initEmptyBeads, showEmptyBeadsNearMouse,
+  getEmptyBeadMesh, getEmptyBeadDate, removeEmptyBeadInstance,
+} from './three/emptyBeads.js';
 import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
+import { openReadOverlay, closeReadOverlay }   from './three/popups/readOverlay.js';
+import {
+  openCreatePanel, closeCreatePanel, isCreatePanelOpen,
+} from './three/popups/createPanel.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -114,13 +121,10 @@ window.addEventListener('mouseup', () => {
   }
 });
 
-// ── Surface-click navigation ────────────────────────────────────────────────
-// Perspective view: click near spiral top → plan
-// Plan view:        click near centre     → perspective
-
-const surfaceRaycaster = new THREE.Raycaster();
-const surfaceMouse     = new THREE.Vector2();
-let   clickDownPos     = null;
+// ── Click detection (beads + surface navigation) ────────────────────────────
+const clickRaycaster = new THREE.Raycaster();
+const clickMouse     = new THREE.Vector2();
+let   clickDownPos   = null;
 
 canvas.addEventListener('mousedown', (e) => {
   clickDownPos = { x: e.clientX, y: e.clientY };
@@ -138,17 +142,58 @@ canvas.addEventListener('click', (e) => {
   if (mode !== 'perspective' && mode !== 'plan') return;
 
   // Build NDC from click position
-  surfaceMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
-  surfaceMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
-  surfaceRaycaster.setFromCamera(surfaceMouse, camera);
+  clickMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+  clickMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  const activeCam = getActiveCamera();
+  clickRaycaster.setFromCamera(clickMouse, activeCam);
 
-  const hits = surfaceRaycaster.intersectObject(spiral, false);
+  // ── 1. Check filled beads ────────────────────────────────────────────
+  const beadMeshes = getAllBeadMeshes();
+  if (beadMeshes.length) {
+    const beadHits = clickRaycaster.intersectObjects(beadMeshes, false);
+    if (beadHits.length) {
+      const mesh  = beadHits[0].object;
+      const entry = loadedEntries.find(en => en.id === mesh.userData.entryId);
+      if (entry) {
+        closeCreatePanel();
+        openReadOverlay(entry, mesh.position);
+        return;
+      }
+    }
+  }
 
-  if (mode === 'perspective' && hits.length && hits[0].point.y > spiralTopY - 16) {
-    // Clicked near the top of the spiral → switch to plan
+  // ── 2. Check empty beads (InstancedMesh) ─────────────────────────────
+  const emptyMesh = getEmptyBeadMesh();
+  if (emptyMesh) {
+    const emptyHits = clickRaycaster.intersectObject(emptyMesh, false);
+    if (emptyHits.length) {
+      const instId = emptyHits[0].instanceId;
+      // Perspective view: only allow if camera close enough
+      if (mode === 'perspective') {
+        const camDist = Math.sqrt(activeCam.position.x ** 2 + activeCam.position.z ** 2);
+        if (camDist > 60) { /* too far — fall through to surface nav */ }
+        else {
+          _openCreateForInstance(instId);
+          return;
+        }
+      } else {
+        // Plan view: always allow
+        _openCreateForInstance(instId);
+        return;
+      }
+    }
+  }
+
+  // ── 3. Close any open overlay/panel on empty click ───────────────────
+  closeReadOverlay();
+  closeCreatePanel();
+
+  // ── 4. Surface-click navigation (legacy) ─────────────────────────────
+  const spiralHits = clickRaycaster.intersectObject(spiral, false);
+
+  if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > spiralTopY - 16) {
     setViewMode('plan', spiralTopY);
   } else if (mode === 'plan') {
-    // Click inside the spiral hole (near viewport centre) → perspective
     const cx = window.innerWidth  / 2;
     const cy = window.innerHeight / 2;
     if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
@@ -156,6 +201,25 @@ canvas.addEventListener('click', (e) => {
     }
   }
 });
+
+/** Helper: open the create panel for a given empty-bead instance. */
+function _openCreateForInstance(instanceId) {
+  const dateISO = getEmptyBeadDate(instanceId);
+  if (!dateISO) return;
+  const pos = dateToPosition(new Date(dateISO), birthday);
+  closeReadOverlay();
+  openCreatePanel(dateISO, pos, async (data) => {
+    try {
+      const newEntry = await api.createEntry(data);
+      loadedEntries.push(newEntry);
+      addBead(newEntry, birthday);
+      removeEmptyBeadInstance(instanceId);
+      closeCreatePanel();
+    } catch (err) {
+      console.error('Failed to create entry:', err);
+    }
+  });
+}
 
 // ── Empty-bead hover reveal ─────────────────────────────────────────────────
 let lastMouseEvent = null;

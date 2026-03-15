@@ -20,6 +20,7 @@ const ZOOM_GATE   = 60;   // camera must be closer than this to spiral surface
 let instancedMesh = null;
 let opacityAttr   = null;
 let instancePositions = []; // THREE.Vector3[] parallel to instance indices
+let instanceDates     = []; // ISO date strings parallel to instance indices
 
 // Reusable temporaries for per-frame distance calc
 const _ray    = new THREE.Raycaster();
@@ -44,11 +45,13 @@ export function initEmptyBeads(birthday, filledDates) {
 
   // Collect unfilled positions
   instancePositions = [];
+  instanceDates     = [];
   const cur = new Date(bday);
   while (cur <= today) {
     const key = cur.toISOString().slice(0, 10);
     if (!filled.has(key)) {
       instancePositions.push(dateToPosition(new Date(cur), bday));
+      instanceDates.push(key);
     }
     cur.setTime(cur.getTime() + MS_PER_DAY);
   }
@@ -178,8 +181,31 @@ export function hideAllEmptyBeads() {
   opacityAttr.needsUpdate = true;
 }
 
-/** Get the instance index for a given date (or -1 if not found). */
-export function getEmptyBeadAtDate(date) {
-  // Not commonly needed at this stage — returns -1 as placeholder
-  return -1;
+/** Get the InstancedMesh (for raycasting). */
+export function getEmptyBeadMesh() {
+  return instancedMesh;
+}
+
+/** Get the ISO date string for a given instance index. */
+export function getEmptyBeadDate(instanceId) {
+  return instanceDates[instanceId] || null;
+}
+
+/**
+ * Hide a single instance (set its scale to 0) after an entry was created for that date.
+ * We don't actually remove it — just collapse the transform so it's invisible.
+ */
+export function removeEmptyBeadInstance(instanceId) {
+  if (!instancedMesh || instanceId < 0) return;
+  const dummy = new THREE.Object3D();
+  dummy.position.set(0, 0, 0);
+  dummy.scale.set(0, 0, 0);
+  dummy.updateMatrix();
+  instancedMesh.setMatrixAt(instanceId, dummy.matrix);
+  instancedMesh.instanceMatrix.needsUpdate = true;
+  // Also zero the opacity
+  if (opacityAttr) {
+    opacityAttr.array[instanceId] = 0;
+    opacityAttr.needsUpdate = true;
+  }
 }

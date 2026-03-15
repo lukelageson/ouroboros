@@ -65,3 +65,10 @@ export function initBeads(entries, birthday) {
 export function getBeadMesh(entryId) {
   return meshMap.get(entryId) || null;
 }
+
+/**
+ * Get all bead meshes as an array (for raycasting).
+ */
+export function getAllBeadMeshes() {
+  return [...meshMap.values()];
+}

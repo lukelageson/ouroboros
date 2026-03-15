@@ -89,6 +89,11 @@ export function registerPanel(panel, anchorPosition) {
   activePanels.push({ panel, anchorPosition });
 }
 
+export function unregisterPanel(panel) {
+  const idx = activePanels.findIndex(p => p.panel === panel);
+  if (idx >= 0) activePanels.splice(idx, 1);
+}
+
 // Resize handler
 window.addEventListener('resize', () => {
   const w = window.innerWidth;
