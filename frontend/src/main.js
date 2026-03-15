@@ -234,6 +234,7 @@ canvas.addEventListener('click', (e) => {
       const entry = loadedEntries.find(en => en.id === mesh.userData.entryId);
       if (entry) {
         closeCreatePanel();
+        closeReadOverlay();
         if (mode === 'detail') {
           openReadOverlay2D(entry);
         } else {
@@ -258,11 +259,12 @@ canvas.addEventListener('click', (e) => {
           _openCreateForInstance(instId);
           return;
         }
-      } else {
+      } else if (mode === 'plan') {
         // Plan view: always allow
         _openCreateForInstance(instId);
         return;
       }
+      // detail mode: no create panel on empty bead click
     }
   }
 
