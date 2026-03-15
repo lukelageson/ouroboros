@@ -44,9 +44,16 @@ import {
   initRingStack, expandStack, collapseStack, updateRingStack,
   getRingMeshes, handleRingClick, isExpanded, getStackGroup,
   updateProgress, addCompletedRing, setRingComputing,
+  getRingPosition, getCompletedAnalyses,
 } from './three/analysisRings.js';
 import { runParticleRain } from './three/particleRain.js';
 import { getBeadMesh } from './three/beads.js';
+import {
+  enterAnalysisViewingMode, exitAnalysisViewingMode,
+  isInAnalysisViewingMode, getGlowingMeshes, getCurrentAnalysis,
+  applyBelongingIndicators,
+} from './three/analysisViewingMode.js';
+import { showAnnotation, hideAnnotation } from './three/popups/analysisAnnotation.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -248,6 +255,11 @@ canvas.addEventListener('click', (e) => {
   // ── 3. Close any open overlay/panel on empty click ───────────────────
   closeReadOverlay();
   closeCreatePanel();
+  if (isInAnalysisViewingMode()) {
+    hideAnnotation();
+    exitAnalysisViewingMode();
+    return;
+  }
 
   // ── 4. Surface-click navigation (legacy) ─────────────────────────────
   const spiralHits = clickRaycaster.intersectObject(spiral, false);
@@ -349,6 +361,47 @@ function _showBriefMessage(text) {
   setTimeout(() => { el.remove(); }, 3000);
 }
 
+// ── Run Again handler ────────────────────────────────────────────────────────
+async function _triggerRunAgain(category) {
+  setRingComputing(category, true);
+
+  try {
+    const result = await api.analyze({ category });
+    setRingComputing(category, false);
+
+    if (result.insufficient) {
+      _showBriefMessage(result.reason || 'Not enough data yet');
+      return;
+    }
+
+    addCompletedRing(result);
+
+    const targetPositions = [];
+    const targetMeshes = [];
+    if (result.entry_ids && result.entry_ids.length) {
+      for (const entryId of result.entry_ids) {
+        const mesh = getBeadMesh(entryId);
+        if (mesh) {
+          targetPositions.push(mesh.position.clone());
+          targetMeshes.push(mesh);
+        }
+      }
+    }
+
+    const sourcePos = new THREE.Vector3(0, spiralTopY + 20, 0);
+    runParticleRain(sourcePos, targetPositions, targetMeshes, () => {
+      const ringPos = getRingPosition(category);
+      enterAnalysisViewingMode(
+        result, getAllBeadMeshes(), ringPos, _triggerRunAgain
+      );
+    });
+  } catch (err) {
+    console.error('[ring] Run Again failed:', err);
+    setRingComputing(category, false);
+    _showBriefMessage('Analysis failed — please try again');
+  }
+}
+
 // ── Empty-bead hover reveal ─────────────────────────────────────────────────
 let lastMouseEvent = null;
 
@@ -360,6 +413,52 @@ registerFrameCallback((cam) => {
   const mode = getCurrentMode();
   showEmptyBeadsNearMouse(lastMouseEvent, cam, mode);
 });
+
+// ── Analysis viewing mode: hover raycasting for Type C annotations ──────────
+const hoverRaycaster = new THREE.Raycaster();
+const hoverMouse     = new THREE.Vector2();
+
+registerFrameCallback((cam) => {
+  if (!isInAnalysisViewingMode() || !lastMouseEvent) return;
+
+  hoverMouse.x =  (lastMouseEvent.clientX / window.innerWidth)  * 2 - 1;
+  hoverMouse.y = -(lastMouseEvent.clientY / window.innerHeight) * 2 + 1;
+  hoverRaycaster.setFromCamera(hoverMouse, cam);
+
+  const glowing = getGlowingMeshes();
+  if (!glowing.length) { hideAnnotation(); return; }
+
+  const hits = hoverRaycaster.intersectObjects(glowing, false);
+  if (hits.length) {
+    const mesh = hits[0].object;
+    const entryId = mesh.userData.entryId;
+    const entry = loadedEntries.find(e => e.id === entryId);
+    if (entry) {
+      const analysis = getCurrentAnalysis();
+      const role = _deriveAnalysisRole(analysis, entry);
+      showAnnotation(entry, role, mesh.position);
+    }
+  } else {
+    hideAnnotation();
+  }
+});
+
+/**
+ * Derive an analysis role for a bead: first sentence of description
+ * mentioning a date or 'entry', fallback to generic text.
+ */
+function _deriveAnalysisRole(analysis, entry) {
+  if (!analysis || !analysis.description) return 'Related to this pattern';
+  const sentences = analysis.description.split(/(?<=[.!?])\s+/);
+  const datePart = entry.entry_date; // "YYYY-MM-DD"
+  for (const s of sentences) {
+    const lower = s.toLowerCase();
+    if (lower.includes('entry') || lower.includes(datePart)) {
+      return s.trim();
+    }
+  }
+  return sentences[0] ? sentences[0].trim() : 'Related to this pattern';
+}
 
 // ── Keyboard: ribbon toggle only ────────────────────────────────────────────
 window.addEventListener('keydown', (e) => {
@@ -424,9 +523,13 @@ async function loadEntries() {
           const ringY = ringGroup ? ringGroup.position.y + spiralTopY + 20 : spiralTopY + 20;
           const sourcePos = new THREE.Vector3(0, spiralTopY + 20, 0);
 
-          // Run particle rain to target beads
+          // Run particle rain to target beads, then enter viewing mode
           runParticleRain(sourcePos, targetPositions, targetMeshes, () => {
             console.log('[ring] Analysis complete, beads glowing:', category);
+            const ringPos = getRingPosition(category);
+            enterAnalysisViewingMode(
+              result, getAllBeadMeshes(), ringPos, _triggerRunAgain
+            );
           });
         } catch (err) {
           console.error('[ring] Analyze failed:', err);
@@ -435,9 +538,14 @@ async function loadEntries() {
         }
       },
       onViewAnalysis: (analysis) => {
-        console.log('[ring] View analysis:', analysis);   // Prompt 7.3
+        const ringPos = getRingPosition(analysis.category);
+        enterAnalysisViewingMode(
+          analysis, getAllBeadMeshes(), ringPos, _triggerRunAgain
+        );
       },
     });
+    // Apply belonging indicators to beads that are referenced by any analysis
+    applyBelongingIndicators(analyses, getAllBeadMeshes());
   } catch (err) {
     console.error('Failed to load analyses:', err);
     // Initialize without completed analyses

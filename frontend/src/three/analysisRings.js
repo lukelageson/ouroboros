@@ -406,3 +406,15 @@ export function getStackGroup() { return stackGroup; }
 
 /** Get list of category definitions. */
 export function getCategories() { return CATEGORIES; }
+
+/** Get the world-space position of a category ring (for panel placement). */
+export function getRingPosition(category) {
+  const ring = categoryRings.find(r => r.category.key === category);
+  if (!ring) return new THREE.Vector3(0, baseY, 0);
+  return new THREE.Vector3(0, ring.mesh.position.y, 0);
+}
+
+/** Get all completed analyses. */
+export function getCompletedAnalyses() {
+  return completedAnalyses;
+}
