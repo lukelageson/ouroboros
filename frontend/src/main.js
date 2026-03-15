@@ -447,7 +447,7 @@ registerFrameCallback(() => {
       mesh.visible = true;
     } else {
       const r = mesh.userData.isMilestone ? 0.825 : 0.45;
-      mesh.visible = mesh.position.y + r < clipY + 0.05;
+      mesh.visible = mesh.position.y + r < clipY;
     }
   }
 });

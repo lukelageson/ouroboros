@@ -79,11 +79,9 @@ export function buildSpiral(birthday, today, spiralTopY) {
            gl_FragColor.a *= mix(0.1, 1.0, yFade);
          }
          if (uDetailMode > 0.5) {
-           float upperY = uDetailTargetY + 5.0;
            float lowerY = uDetailTargetY - 8.0;
-           float upperFade = 1.0 - smoothstep(upperY - 2.5, upperY, vWorldY);
            float lowerFade = smoothstep(lowerY, lowerY + 2.5, vWorldY);
-           gl_FragColor.a *= upperFade * lowerFade;
+           gl_FragColor.a *= lowerFade;
          }`
       );
   };

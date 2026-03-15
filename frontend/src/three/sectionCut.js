@@ -133,6 +133,8 @@ function _buildEndCap(spiralTopY) {
   });
   capMesh = new THREE.Mesh(capGeo, capMat);
   capMesh.rotation.x = -Math.PI / 2; // lay flat in XZ plane
+  capMesh.renderOrder = 1;
+  capMesh.material.depthTest = false;
   capMesh.visible = false; // hidden until slider is shown
   scene.add(capMesh);
   _updateEndCap(spiralTopY);
