@@ -9,19 +9,20 @@ const _planQuat = new THREE.Quaternion().setFromAxisAngle(
 
 const BASE_SCALE = 0.05;
 
+// Set by main.js each frame so we know the settled view mode
+let _viewMode = 'perspective';
+export function setPanelViewMode(mode) { _viewMode = mode; }
+
 /**
  * Positions a CSS3D panel so it always faces the camera and stays on the
- * camera-facing side of the anchor point. If the panel would end up behind
- * geometry (dot product between camera direction and anchor-to-camera is
- * negative), it offsets 20 units toward the camera.
+ * camera-facing side of the anchor point.
  *
- * In plan view (camera looking straight down), panels are pinned horizontal
- * and scaled up for readability.
+ * In plan view: panel laid flat (horizontal), 3x scale for readability.
+ * In perspective/detail view: panel bills toward camera, normal scale.
  */
 export function positionPanelFacingCamera(panel, anchorPosition, camera) {
-  // Detect plan view: camera's forward direction is nearly straight down
   camera.getWorldDirection(_camDir);
-  const isPlanLike = _camDir.y < -0.95;
+  const isPlanLike = _viewMode === 'plan';
 
   // Direction from anchor to camera
   _toAnchor.subVectors(camera.position, anchorPosition).normalize();

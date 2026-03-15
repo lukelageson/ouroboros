@@ -17,13 +17,14 @@ import { webgl } from './renderer.js';
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY   = 86400000;
 
-let clipPlane    = null;
-let birthdayDate = null;
-let sliderEl     = null;
-let labelEl      = null;
-let trackEl      = null;
-let handleEl     = null;
-let _spiralTopY  = 0;
+let clipPlane       = null;
+let detailLowerPlane = null; // second plane used in detail view: y >= lowerY
+let birthdayDate    = null;
+let sliderEl        = null;
+let labelEl         = null;
+let trackEl         = null;
+let handleEl        = null;
+let _spiralTopY     = 0;
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -63,6 +64,28 @@ export function setSectionCutY(y) {
 /** Get the current clip-plane Y value. */
 export function getSectionCutY() {
   return clipPlane ? clipPlane.constant : _spiralTopY;
+}
+
+/**
+ * Add a lower clip plane for detail view, hiding everything below camY - halfHeight.
+ * Called each frame while in detail mode.
+ */
+export function setDetailClipWindow(camY, halfHeight = 22) {
+  const lowerY = camY - halfHeight;
+  if (!detailLowerPlane) {
+    detailLowerPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -lowerY);
+    webgl.clippingPlanes = clipPlane ? [clipPlane, detailLowerPlane] : [detailLowerPlane];
+  } else {
+    detailLowerPlane.constant = -lowerY;
+  }
+}
+
+/** Remove the detail-view lower clip plane (call when leaving detail view). */
+export function clearDetailClipWindow() {
+  if (detailLowerPlane) {
+    webgl.clippingPlanes = clipPlane ? [clipPlane] : [];
+    detailLowerPlane = null;
+  }
 }
 
 export function showSectionCutSlider() {

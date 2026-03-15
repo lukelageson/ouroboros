@@ -17,6 +17,8 @@ import {
   showSectionCutSlider,
   hideSectionCutSlider,
   getSectionCutY,
+  setDetailClipWindow,
+  clearDetailClipWindow,
 } from './three/sectionCut.js';
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
@@ -28,7 +30,8 @@ import {
   getEmptyBeadMesh, getEmptyBeadDate, removeEmptyBeadInstance,
 } from './three/emptyBeads.js';
 import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
-import { openReadOverlay, closeReadOverlay }   from './three/popups/readOverlay.js';
+import { setPanelViewMode }                     from './three/panelManager.js';
+import { openReadOverlay, closeReadOverlay }    from './three/popups/readOverlay.js';
 import {
   openCreatePanel, closeCreatePanel, isCreatePanelOpen,
 } from './three/popups/createPanel.js';
@@ -74,6 +77,16 @@ registerFrameCallback(() => {
 
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
+
+  // Detail view: lower clip plane + panel mode
+  if (mode === 'detail') {
+    setDetailClipWindow(getActiveCamera().position.y);
+  } else {
+    clearDetailClipWindow();
+  }
+
+  // Tell panelManager the settled view mode so it scales/orients popups correctly
+  setPanelViewMode(mode || 'perspective');
 });
 
 registerFrameCallback((cam) => {

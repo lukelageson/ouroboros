@@ -136,18 +136,16 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
   }
 
   if (viewMode === 'detail') {
-    // Detail view: show empties near camera at constant opacity
-    const camXZ = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2);
-    const camY  = cam.position.y;
+    // Camera is DETAIL_H=15 above the target point — compare against target Y
+    const targetY  = cam.position.y - 15;
+    const camAngle = Math.atan2(cam.position.z, cam.position.x);
     for (let i = 0; i < count; i++) {
       const p = instancePositions[i];
-      const dy = Math.abs(p.y - camY);
-      // Angular distance on the spiral
-      const angDist = Math.abs(
-        Math.atan2(p.z, p.x) - Math.atan2(cam.position.z, cam.position.x)
-      );
-      const near = dy < 12 && angDist < 1.2;
-      arr[i] = near ? 0.5 : 0;
+      const dy = Math.abs(p.y - targetY);
+      let angDiff = Math.atan2(p.z, p.x) - camAngle;
+      if (angDiff >  Math.PI) angDiff -= 2 * Math.PI;
+      if (angDiff < -Math.PI) angDiff += 2 * Math.PI;
+      arr[i] = (dy < 10 && Math.abs(angDiff) < 1.0) ? 0.55 : 0;
     }
     opacityAttr.needsUpdate = true;
     return;
