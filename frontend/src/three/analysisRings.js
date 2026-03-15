@@ -61,6 +61,7 @@ function makeTorus(radius, tube, color, emissiveIntensity = 0.15) {
     roughness: 0.6,
     metalness: 0.2,
   });
+  mat.clippingPlanes = []; // opt out of global section-cut clip plane
   return new THREE.Mesh(geo, mat);
 }
 
@@ -76,6 +77,7 @@ function makeArc(radius, tube, fraction) {
     roughness: 0.4,
     metalness: 0.3,
   });
+  mat.clippingPlanes = []; // opt out of global section-cut clip plane
   const mesh = new THREE.Mesh(geo, mat);
   // Rotate so arc starts at "12 o'clock"
   mesh.rotation.x = Math.PI / 2;
