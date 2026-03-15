@@ -9,8 +9,8 @@ router.post('/register', async (req, res) => {
   try {
     const { email, password, birthday } = req.body;
 
-    if (!email || !password || !birthday) {
-      return res.status(400).json({ error: 'Email, password, and birthday are required' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
@@ -21,7 +21,7 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await pool.query(
       'INSERT INTO users (email, password_hash, birthday) VALUES ($1, $2, $3) RETURNING id, email, birthday',
-      [email, passwordHash, birthday]
+      [email, passwordHash, birthday || null]
     );
 
     const user = result.rows[0];
@@ -82,6 +82,26 @@ router.get('/me', requireAuth, async (req, res) => {
     res.json({ id: user.id, email: user.email, birthday: user.birthday });
   } catch (err) {
     console.error('Me error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.patch('/users/birthday', requireAuth, async (req, res) => {
+  try {
+    const { birthday } = req.body;
+    if (!birthday) {
+      return res.status(400).json({ error: 'Birthday is required' });
+    }
+    const result = await pool.query(
+      'UPDATE users SET birthday = $1 WHERE id = $2 RETURNING id, email, birthday',
+      [birthday, req.session.userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Update birthday error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

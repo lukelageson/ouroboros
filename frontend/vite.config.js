@@ -14,6 +14,7 @@ export default defineConfig({
       input: {
         landing: path.resolve(__dirname, 'index.html'),
         app: path.resolve(__dirname, 'app.html'),
+        onboarding: path.resolve(__dirname, 'onboarding.html'),
       },
     },
   },

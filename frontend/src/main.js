@@ -450,7 +450,12 @@ function buildLoginForm() {
 // Check session on load — redirect to landing if not authenticated
 (async () => {
   try {
-    await api.me();
+    const user = await api.me();
+    // If user hasn't set birthday yet, redirect to onboarding
+    if (!user.birthday) {
+      window.location.href = '/onboarding.html';
+      return;
+    }
     await loadEntries();
   } catch (err) {
     if (err.status === 401) {

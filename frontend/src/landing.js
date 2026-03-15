@@ -139,7 +139,6 @@ const form = document.getElementById('auth-form');
 const authTitle = document.getElementById('auth-title');
 const authEmail = document.getElementById('auth-email');
 const authPassword = document.getElementById('auth-password');
-const authBirthday = document.getElementById('auth-birthday');
 const authSubmit = document.getElementById('auth-submit');
 const authError = document.getElementById('auth-error');
 const authBack = document.getElementById('auth-back');
@@ -150,12 +149,9 @@ function showForm(registerMode) {
   isRegisterMode = registerMode;
   authTitle.textContent = registerMode ? 'REGISTER' : 'LOG IN';
   authSubmit.textContent = registerMode ? 'REGISTER' : 'LOG IN';
-  authBirthday.style.display = registerMode ? 'block' : 'none';
-  authBirthday.required = registerMode;
   authError.textContent = '';
   authEmail.value = '';
   authPassword.value = '';
-  authBirthday.value = '';
   formContainer.classList.add('visible');
 }
 
@@ -175,8 +171,13 @@ form.addEventListener('submit', async (e) => {
       await api.register({
         email: authEmail.value,
         password: authPassword.value,
-        birthday: authBirthday.value,
       });
+      await api.login({
+        email: authEmail.value,
+        password: authPassword.value,
+      });
+      window.location.href = '/onboarding.html';
+      return;
     }
     await api.login({
       email: authEmail.value,

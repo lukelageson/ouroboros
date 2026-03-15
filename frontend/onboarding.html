@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ouroboros — Welcome</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0e0a06; overflow: hidden; font-family: system-ui, sans-serif; }
+    #scene { position: fixed; inset: 0; z-index: 0; }
+
+    /* ── Birthday prompt ─────────────────────────────────────── */
+    #birthday-overlay {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      pointer-events: none;
+    }
+
+    #birthday-prompt {
+      display: flex; flex-direction: column; align-items: center; gap: 18px;
+      pointer-events: auto;
+    }
+
+    #birthday-prompt h2 {
+      font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+      color: #fff5e6;
+      font-weight: 300;
+      letter-spacing: 0.12em;
+    }
+
+    #birth-year {
+      width: 160px;
+      padding: 12px 16px;
+      background: rgba(14, 10, 6, 0.85);
+      border: 1px solid rgba(245, 166, 35, 0.4);
+      border-radius: 6px;
+      color: #fff5e6;
+      font-family: monospace;
+      font-size: 28px;
+      text-align: center;
+      letter-spacing: 4px;
+      outline: none;
+    }
+
+    #birth-year:focus {
+      border-color: #f5a623;
+      box-shadow: 0 0 12px rgba(245, 166, 35, 0.2);
+    }
+
+    #birth-year::placeholder { color: rgba(255, 245, 230, 0.25); font-size: 16px; letter-spacing: 2px; }
+
+    #btn-continue {
+      padding: 12px 32px;
+      background: transparent;
+      border: 1px solid #f5a623;
+      color: #f5a623;
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s, opacity 0.3s;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #btn-continue.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #btn-continue:hover { background: rgba(245, 166, 35, 0.12); }
+
+    /* ── Milestone prompts ───────────────────────────────────── */
+    #milestone-overlay {
+      position: fixed; inset: 0; z-index: 20;
+      display: none;
+      align-items: center; justify-content: center;
+      background: rgba(14, 10, 6, 0.88);
+    }
+
+    #milestone-overlay.visible { display: flex; }
+
+    #milestone-card {
+      display: flex; flex-direction: column; align-items: center; gap: 16px;
+      padding: 36px 40px;
+      background: #1a1008;
+      border: 1px solid rgba(245, 166, 35, 0.3);
+      border-radius: 8px;
+      max-width: 420px;
+      width: 90vw;
+    }
+
+    #milestone-card h3 {
+      font-size: 16px; font-weight: 400;
+      color: #fff5e6; text-align: center;
+      line-height: 1.5;
+    }
+
+    .milestone-optional {
+      font-size: 12px;
+      color: rgba(245, 166, 35, 0.5);
+      font-style: italic;
+    }
+
+    #milestone-date {
+      padding: 10px 14px;
+      background: #0d0804;
+      border: 1px solid rgba(245, 166, 35, 0.3);
+      border-radius: 4px;
+      color: #fff5e6;
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      width: 100%;
+    }
+
+    .milestone-btn {
+      padding: 11px 24px;
+      background: transparent;
+      border: 1px solid #f5a623;
+      color: #f5a623;
+      border-radius: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .milestone-btn:hover { background: rgba(245, 166, 35, 0.12); }
+
+    #milestone-actions {
+      display: flex; gap: 14px; align-items: center;
+      flex-wrap: wrap; justify-content: center;
+    }
+
+    #btn-skip {
+      background: none; border: none;
+      color: rgba(245, 166, 35, 0.5);
+      font-size: 13px; cursor: pointer;
+      text-decoration: underline;
+    }
+
+    #btn-skip:hover { color: #f5a623; }
+
+    #btn-go-to-app {
+      position: fixed;
+      bottom: 32px; right: 32px;
+      z-index: 25;
+      padding: 10px 20px;
+      background: transparent;
+      border: 1px solid rgba(245, 166, 35, 0.4);
+      color: rgba(245, 166, 35, 0.6);
+      border-radius: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, opacity 0.3s;
+      display: none;
+    }
+
+    #btn-go-to-app.visible { display: block; }
+    #btn-go-to-app:hover { background: rgba(245, 166, 35, 0.12); color: #f5a623; }
+  </style>
+</head>
+<body>
+  <div id="scene"></div>
+
+  <!-- Birthday prompt -->
+  <div id="birthday-overlay">
+    <div id="birthday-prompt">
+      <h2>When were you born?</h2>
+      <input type="number" id="birth-year" placeholder="Year" min="1920" max="2007" step="1">
+      <button id="btn-continue">Continue</button>
+    </div>
+  </div>
+
+  <!-- Milestone prompts -->
+  <div id="milestone-overlay">
+    <div id="milestone-card">
+      <h3 id="milestone-question"></h3>
+      <input type="month" id="milestone-date">
+      <div id="milestone-actions">
+        <button class="milestone-btn" id="btn-place">Place this moment</button>
+        <button id="btn-skip">Skip</button>
+      </div>
+    </div>
+  </div>
+
+  <button id="btn-go-to-app">Take me to the app</button>
+
+  <script type="module" src="/src/onboarding.js"></script>
+</body>
+</html>

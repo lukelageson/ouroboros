@@ -29,7 +29,8 @@ async function request(method, path, body) {
 export const login    = (data) => request('POST', '/auth/login', data);
 export const register = (data) => request('POST', '/auth/register', data);
 export const logout   = ()     => request('POST', '/auth/logout');
-export const me       = ()     => request('GET',  '/auth/me');
+export const me             = ()     => request('GET',  '/auth/me');
+export const updateBirthday = (data) => request('PATCH', '/auth/users/birthday', data);
 
 // ── Entries ─────────────────────────────────────────────────────────────────
 export const getEntries  = ()     => request('GET',  '/entries');
