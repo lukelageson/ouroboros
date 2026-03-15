@@ -41,16 +41,26 @@ export function positionPanelFacingCamera(panel, anchorPosition, camera) {
     // Plan view: lay panel flat facing up, always horizontal
     panel.quaternion.copy(_planQuat);
     panel.scale.setScalar(BASE_SCALE * 3);
+
+    // Clamp panel Z so it doesn't extend past the visible frustum.
+    // In plan view the camera looks straight down; frustum half-extent in Z
+    // is tan(fov/2) * cameraHeight. Leave 12-unit margin for panel content.
+    const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+    const dist = camera.position.y - panel.position.y;
+    const halfZ = Math.tan(halfFov) * dist - 12;
+    const camZ = camera.position.z;
+    panel.position.z = Math.max(panel.position.z, camZ - halfZ);
+    panel.position.z = Math.min(panel.position.z, camZ + halfZ);
+
+    // Same for X axis
+    const aspect = camera.aspect || 1;
+    const halfX = halfZ * aspect - 12;
+    const camX = camera.position.x;
+    panel.position.x = Math.max(panel.position.x, camX - halfX);
+    panel.position.x = Math.min(panel.position.x, camX + halfX);
   } else if (_viewMode === 'detail') {
-    // Flat like plan view, but rotated around world-Y so text top faces the camera.
-    // Uses quaternion composition to avoid Euler gimbal issues:
-    //   _planQuat  = Rx(-90°)  →  lies flat, text-top points to world -Z
-    //   _yQuat     = Ry(α+π)   →  spins text-top toward camera horizontal dir
-    const dx = camera.position.x - panel.position.x;
-    const dz = camera.position.z - panel.position.z;
-    _yQuat.setFromAxisAngle(_yAxis, Math.atan2(dx, dz) + Math.PI);
-    _detailQuat.multiplyQuaternions(_yQuat, _planQuat);
-    panel.quaternion.copy(_detailQuat);
+    // Detail view: billboard toward camera (same as perspective) but larger
+    panel.lookAt(camera.position);
     panel.scale.setScalar(BASE_SCALE * 3);
   } else {
     // Perspective view: full billboard toward camera

@@ -134,8 +134,8 @@ registerPostRenderCallback(() => {
   renderViewCube();
 });
 
-// ── Start in Plan View ───────────────────────────────────────────────────────
-setViewMode('plan', spiralTopY);
+// ── Start in Perspective View ────────────────────────────────────────────────
+setViewMode('perspective', spiralTopY);
 
 // ── Detail-view panning ──────────────────────────────────────────────────────
 let panDragging = false;

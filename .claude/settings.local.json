@@ -21,7 +21,21 @@
       "Bash(PGPASSWORD=password psql -U postgres -d ouroboros_dev -c \"DELETE FROM users WHERE email=''test@ouroboros.dev'';\")",
       "Bash(PGPASSWORD=password psql -U postgres -d ouroboros_dev -c \"DELETE FROM entries WHERE user_id IN \\(SELECT id FROM users WHERE email=''test14@ouroboros.dev''\\); DELETE FROM users WHERE email=''test14@ouroboros.dev'';\")",
       "Bash(node -e \"const pkg = require\\(''''./frontend/node_modules/three/package.json''''\\); const addons = pkg.exports?.[''''./addons/*'''']; console.log\\(JSON.stringify\\(addons, null, 2\\)\\)\")",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npx vite:*)",
+      "Bash(find /c/Users/Luke/Documents/11_Coding/Repos/ouroboros/backend -not -path */node_modules/* -type f)",
+      "Bash(curl -s http://localhost:3001/health)",
+      "Bash(curl -s -X POST http://localhost:3001/api/auth/register -H 'Content-Type: application/json' -d '{\"\"email\"\":\"\"test@ouroboros.dev\"\",\"\"password\"\":\"\"test1234\"\",\"\"birthday\"\":\"\"1986-03-14\"\"}')",
+      "Bash(curl -s -X POST http://localhost:3001/api/auth/register -H \"Content-Type: application/json\" -d \"{\"\"email\"\":\"\"test@ouroboros.dev\"\",\"\"password\"\":\"\"test1234\"\",\"\"birthday\"\":\"\"1986-03-14\"\"}\")",
+      "Bash(node backend/src/index.js)",
+      "Bash(PGPASSWORD=password psql -h localhost -U postgres -d ouroboros_dev -c \"ALTER TABLE users ALTER COLUMN birthday DROP NOT NULL;\")",
+      "Bash(node -e \"require\\(''./src/routes/auth.js''\\); console.log\\(''auth routes OK''\\)\")",
+      "Bash(node -e \"const p = require\\(''./node_modules/openai/package.json''\\); console.log\\(p.version, p.type\\)\")",
+      "Bash(node -e \"const OpenAI = require\\(''openai''\\); console.log\\(''OK''\\)\")",
+      "Bash(find /c/Users/Luke/Documents/11_Coding/Repos/ouroboros -maxdepth 2 -name README* -o -name *.md)",
+      "Bash(find /c/Users/Luke/Documents/11_Coding/Repos/ouroboros/backend/src -name *.js)",
+      "Bash(node -e \":*)",
+      "Bash(node src/db/seedDemo.js)"
     ]
   }
 }

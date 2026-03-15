@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { dateToPosition, dateToAngle } from './three/spiralMath.js';
 import * as api from './api.js';
+import { createYearPicker, createMonthYearPicker } from './ui/scrollWheel.js';
 
 // ── Auth gate: must be logged in, must NOT have birthday set ────────────────
 let currentUser = null;
@@ -163,36 +164,24 @@ function animate() {
 }
 
 // ── Birthday input ──────────────────────────────────────────────────────────
-let debounceTimer = null;
+let selectedBirthYear = 1990;
 
 function setupBirthdayInput() {
-  const input = document.getElementById('birth-year');
+  const pickerContainer = document.getElementById('birth-year-picker');
   const btnContinue = document.getElementById('btn-continue');
 
-  input.addEventListener('input', () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      const year = parseInt(input.value, 10);
-      if (year >= 1920 && year <= 2007) {
-        rebuildSpiral(year);
-        btnContinue.classList.add('visible');
-      } else {
-        btnContinue.classList.remove('visible');
-        // Clear spiral if invalid
-        if (spiralMesh) {
-          scene.remove(spiralMesh);
-          spiralMesh.geometry.dispose();
-          spiralMesh.material.dispose();
-          spiralMesh = null;
-          spiralTopY = 0;
-        }
-      }
-    }, 300);
+  const yearPicker = createYearPicker(pickerContainer, 1920, 2007, 1990, (year) => {
+    selectedBirthYear = year;
+    rebuildSpiral(year);
+    btnContinue.classList.add('visible');
   });
 
+  // Build initial spiral
+  rebuildSpiral(selectedBirthYear);
+  btnContinue.classList.add('visible');
+
   btnContinue.addEventListener('click', async () => {
-    const year = parseInt(input.value, 10);
-    if (year < 1920 || year > 2007) return;
+    const year = selectedBirthYear;
 
     // Save birthday to server
     const birthdayStr = `${year}-01-01`;
@@ -246,10 +235,17 @@ function startMilestonePrompts(birthYear) {
 
   const overlay = document.getElementById('milestone-overlay');
   const questionEl = document.getElementById('milestone-question');
-  const dateInput = document.getElementById('milestone-date');
+  const pickerContainer = document.getElementById('milestone-date-picker');
   const btnPlace = document.getElementById('btn-place');
   const btnSkip = document.getElementById('btn-skip');
   const btnGoToApp = document.getElementById('btn-go-to-app');
+
+  let milestoneDate = '';
+  const milestonePicker = createMonthYearPicker(pickerContainer, (val) => {
+    milestoneDate = val;
+  });
+  // Set initial value
+  milestoneDate = milestonePicker.getValue();
 
   function showPrompt(index) {
     if (index >= MILESTONES.length) {
@@ -261,7 +257,6 @@ function startMilestonePrompts(birthYear) {
     const m = MILESTONES[index];
     questionEl.innerHTML = m.question +
       (m.optional ? '<br><span class="milestone-optional">Optional — skip if preferred</span>' : '');
-    dateInput.value = '';
     overlay.classList.add('visible');
 
     // Show "Take me to the app" after first prompt
@@ -271,11 +266,10 @@ function startMilestonePrompts(birthYear) {
   }
 
   btnPlace.addEventListener('click', async () => {
-    const dateVal = dateInput.value; // YYYY-MM format
-    if (!dateVal) return;
+    if (!milestoneDate) return;
 
     const m = MILESTONES[milestoneIndex];
-    const entryDate = dateVal + '-15'; // mid-month
+    const entryDate = milestoneDate + '-15'; // mid-month
 
     try {
       const entry = await api.createEntry({
