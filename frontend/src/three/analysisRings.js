@@ -3,6 +3,9 @@
  *
  * One collapsed ring floats above the spiral. Click to expand into 6 category
  * rings with progress arcs, state coloring, and click handlers.
+ *
+ * Each category has an activeRing (incomplete/available state) and a
+ * completedRings sub-stack of previously completed analysis results.
  */
 
 import * as THREE from 'three';
@@ -13,7 +16,9 @@ const RING_RADIUS   = 12;
 const RING_TUBE     = 0.3;
 const AMBER         = 0xf5a623;
 const DIM_COLOR     = 0x3d2e1e;
-const STACK_GAP     = 5;      // gap between rings when expanded
+const AVAILABLE_CLR = 0xfff5e6;
+const STACK_GAP     = 5;      // gap between category rows when expanded
+const SUB_GAP       = 2;      // gap between completed rings in a sub-stack
 const MAX_STACK_H   = 40;     // max scene units for full stack
 const EXPAND_FRAMES = 30;
 const ARC_TUBE      = 0.35;   // slightly thicker than ring tube for visibility
@@ -31,7 +36,8 @@ const CATEGORIES = [
 // ── State ────────────────────────────────────────────────────────────────────
 let stackGroup      = null;   // THREE.Group holding everything
 let collapsedRing   = null;
-let categoryRings   = [];     // { mesh, arcMesh, category, completed, analysis }
+// Each entry: { mesh, arcMesh, category, completedRings: [{mesh, analysis}], _computing }
+let categoryRings   = [];
 let expanded        = false;
 let animFrame       = 0;
 let animating       = false;
@@ -73,6 +79,14 @@ function makeArc(radius, tube, fraction) {
   const mesh = new THREE.Mesh(geo, mat);
   // Rotate so arc starts at "12 o'clock"
   mesh.rotation.x = Math.PI / 2;
+  return mesh;
+}
+
+function makeCompletedRingMesh(category, tube) {
+  const mesh = makeTorus(RING_RADIUS, tube, AMBER, 0.5);
+  mesh.rotation.x = Math.PI / 2;
+  mesh.userData.category = category;
+  mesh.userData.isCompletedRing = true;
   return mesh;
 }
 
@@ -118,42 +132,70 @@ export function getCategoryProgress(category, entries) {
 
 // ── Build Ring Stack ─────────────────────────────────────────────────────────
 
-function buildCategoryRing(cat, progress, isCompleted, analysis) {
-  const color = isCompleted ? AMBER : DIM_COLOR;
-  const emissive = isCompleted ? 0.5 : 0.1;
+/** Build the active (incomplete/available) ring for a category. */
+function buildActiveRing(cat, progress) {
+  const isAvailable = progress.percent >= 1;
+  const color = isAvailable ? AVAILABLE_CLR : DIM_COLOR;
+  const emissive = isAvailable ? 0.4 : 0.1;
   const mesh = makeTorus(RING_RADIUS, RING_TUBE, color, emissive);
   mesh.rotation.x = Math.PI / 2; // lay flat
   mesh.userData.category = cat.key;
 
   // Progress arc (only for incomplete rings)
   let arcMesh = null;
-  if (!isCompleted && progress.percent > 0) {
+  if (progress.percent > 0) {
     arcMesh = makeArc(RING_RADIUS, ARC_TUBE, progress.percent);
     if (arcMesh) {
       arcMesh.userData.category = cat.key;
     }
   }
 
-  return { mesh, arcMesh, category: cat, completed: isCompleted, analysis };
+  return { mesh, arcMesh };
+}
+
+/**
+ * Compute the Y height of a category's sub-stack (completed rings only).
+ */
+function _subStackHeight(ring) {
+  const n = ring.completedRings.length;
+  if (n === 0) return 0;
+  return n * SUB_GAP;
 }
 
 function positionExpandedRings() {
-  // Uncompleted rings at top, completed below
+  // Sort: incomplete at top, categories with completedRings below
   const sorted = [...categoryRings];
   sorted.sort((a, b) => {
-    if (a.completed !== b.completed) return a.completed ? 1 : -1;
+    const aHas = a.completedRings.length > 0 ? 1 : 0;
+    const bHas = b.completedRings.length > 0 ? 1 : 0;
+    if (aHas !== bHas) return aHas - bHas; // incomplete first
     return 0;
   });
 
-  const n = sorted.length;
-  // Compress if needed to fit MAX_STACK_H
-  const idealHeight = (n - 1) * STACK_GAP;
-  const effectiveGap = idealHeight > MAX_STACK_H ? MAX_STACK_H / (n - 1) : STACK_GAP;
+  // Calculate total height needed: each category takes STACK_GAP + its sub-stack
+  let totalHeight = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    totalHeight += STACK_GAP + _subStackHeight(sorted[i]);
+  }
 
-  for (let i = 0; i < n; i++) {
+  // Compress if needed
+  const scale = totalHeight > MAX_STACK_H ? MAX_STACK_H / totalHeight : 1;
+
+  let currentY = baseY;
+  for (let i = 0; i < sorted.length; i++) {
     const ring = sorted[i];
-    ring._targetY = baseY - (i + 1) * effectiveGap;
+    currentY -= STACK_GAP * scale;
+    ring._targetY = currentY;
     ring._sortIndex = i;
+
+    // Position completed rings below the active ring
+    const subH = _subStackHeight(ring);
+    for (let j = 0; j < ring.completedRings.length; j++) {
+      // Most recent completed ring is last in array, position it closest to active
+      const cr = ring.completedRings[ring.completedRings.length - 1 - j];
+      cr._targetY = currentY - (j + 1) * SUB_GAP * scale;
+    }
+    currentY -= subH * scale;
   }
 }
 
@@ -192,21 +234,35 @@ export function initRingStack(spiralTopY, analyses, entries, callbacks = {}) {
   categoryRings = [];
   for (const cat of CATEGORIES) {
     const progress = getCategoryProgress(cat.key, currentEntries);
-    const completedAnalysis = completedAnalyses.find(a => a.category === cat.key);
-    const isCompleted = !!completedAnalysis;
 
-    const ring = buildCategoryRing(cat, progress, isCompleted, completedAnalysis || null);
-    ring.mesh.visible = false;
-    ring.mesh.position.y = baseY; // start at collapsed position
-    stackGroup.add(ring.mesh);
+    // Build active ring (always shows current progress state)
+    const { mesh, arcMesh } = buildActiveRing(cat, progress);
+    mesh.visible = false;
+    mesh.position.y = baseY;
+    stackGroup.add(mesh);
 
-    if (ring.arcMesh) {
-      ring.arcMesh.visible = false;
-      ring.arcMesh.position.y = baseY;
-      stackGroup.add(ring.arcMesh);
+    if (arcMesh) {
+      arcMesh.visible = false;
+      arcMesh.position.y = baseY;
+      stackGroup.add(arcMesh);
     }
 
-    categoryRings.push(ring);
+    // Build completed rings sub-stack from existing analyses
+    const catAnalyses = completedAnalyses.filter(a => a.category === cat.key);
+    const completedRings = [];
+    for (let i = 0; i < catAnalyses.length; i++) {
+      const isNewest = i === catAnalyses.length - 1;
+      const tube = isNewest ? RING_TUBE : RING_TUBE * 0.6;
+      const crMesh = makeCompletedRingMesh(cat.key, tube);
+      crMesh.visible = false;
+      crMesh.position.y = baseY;
+      stackGroup.add(crMesh);
+      completedRings.push({ mesh: crMesh, analysis: catAnalyses[i], _targetY: baseY });
+    }
+
+    categoryRings.push({
+      mesh, arcMesh, category: cat, completedRings, _computing: false,
+    });
   }
 
   positionExpandedRings();
@@ -228,6 +284,10 @@ export function expandStack() {
     if (ring.arcMesh) {
       ring.arcMesh.visible = true;
       ring.arcMesh.position.y = baseY;
+    }
+    for (const cr of ring.completedRings) {
+      cr.mesh.visible = true;
+      cr.mesh.position.y = baseY;
     }
   }
 }
@@ -256,6 +316,11 @@ export function updateRingStack(time) {
       const y = baseY + (targetY - baseY) * progress;
       ring.mesh.position.y = y;
       if (ring.arcMesh) ring.arcMesh.position.y = y;
+
+      for (const cr of ring.completedRings) {
+        const crTarget = cr._targetY || (baseY - STACK_GAP);
+        cr.mesh.position.y = baseY + (crTarget - baseY) * progress;
+      }
     }
 
     if (t >= 1) {
@@ -268,6 +333,7 @@ export function updateRingStack(time) {
         for (const ring of categoryRings) {
           ring.mesh.visible = false;
           if (ring.arcMesh) ring.arcMesh.visible = false;
+          for (const cr of ring.completedRings) cr.mesh.visible = false;
         }
       }
     }
@@ -288,7 +354,7 @@ export function updateRingStack(time) {
 export function updateProgress(entries) {
   currentEntries = entries;
   for (const ring of categoryRings) {
-    if (ring.completed) continue;
+    // Skip categories that have completed rings and are not currently incomplete
     const progress = getCategoryProgress(ring.category.key, entries);
 
     // Remove old arc
@@ -310,11 +376,11 @@ export function updateProgress(entries) {
       }
     }
 
-    // Update ring color if threshold now met
+    // Update ring color: available (white) when threshold met
     if (progress.percent >= 1) {
-      ring.mesh.material.color.setHex(AMBER);
-      ring.mesh.material.emissive.setHex(AMBER);
-      ring.mesh.material.emissiveIntensity = 0.3;
+      ring.mesh.material.color.setHex(AVAILABLE_CLR);
+      ring.mesh.material.emissive.setHex(AVAILABLE_CLR);
+      ring.mesh.material.emissiveIntensity = 0.4;
     }
   }
 }
@@ -325,25 +391,40 @@ export function addCompletedRing(analysis) {
   const ring = categoryRings.find(r => r.category.key === analysis.category);
   if (!ring) return;
 
-  ring.completed = true;
-  ring.analysis = analysis;
   ring._computing = false;
-
-  // Update appearance to completed (glowing amber)
-  ring.mesh.material.color.setHex(AMBER);
-  ring.mesh.material.emissive.setHex(AMBER);
-  ring.mesh.material.emissiveIntensity = 0.5;
   ring.mesh.scale.set(1, 1, 1);
 
-  // Remove progress arc — no longer needed
-  if (ring.arcMesh) {
-    stackGroup.remove(ring.arcMesh);
-    ring.arcMesh.geometry.dispose();
-    ring.arcMesh.material.dispose();
-    ring.arcMesh = null;
+  // Compress all existing completed rings to 60% tube radius
+  for (const cr of ring.completedRings) {
+    const oldGeo = cr.mesh.geometry;
+    cr.mesh.geometry = new THREE.TorusGeometry(RING_RADIUS, RING_TUBE * 0.6, 16, 64);
+    oldGeo.dispose();
   }
 
+  // Push new completed ring at full tube size
+  const crMesh = makeCompletedRingMesh(analysis.category, RING_TUBE);
+  crMesh.visible = ring.mesh.visible;
+  crMesh.position.y = ring.mesh.position.y;
+  stackGroup.add(crMesh);
+  ring.completedRings.push({ mesh: crMesh, analysis, _targetY: baseY });
+
+  // Reset active ring to available/incomplete appearance
+  const progress = getCategoryProgress(ring.category.key, currentEntries);
+  const isAvailable = progress.percent >= 1;
+  const color = isAvailable ? AVAILABLE_CLR : DIM_COLOR;
+  const emissive = isAvailable ? 0.4 : 0.1;
+  ring.mesh.material.color.setHex(color);
+  ring.mesh.material.emissive.setHex(color);
+  ring.mesh.material.emissiveIntensity = emissive;
+
   positionExpandedRings();
+
+  // Snap completed rings to their new target positions if expanded
+  if (expanded) {
+    for (const cr of ring.completedRings) {
+      cr.mesh.position.y = cr._targetY;
+    }
+  }
 }
 
 /** Set a ring to computing state (pulsating). */
@@ -352,12 +433,15 @@ export function setRingComputing(category, computing = true) {
   if (ring) ring._computing = computing;
 }
 
-/** Get all meshes for raycasting. */
+/** Get all meshes for raycasting (collapsed, active, and completed rings). */
 export function getRingMeshes() {
   const meshes = [];
   if (collapsedRing && collapsedRing.visible) meshes.push(collapsedRing);
   for (const ring of categoryRings) {
     if (ring.mesh.visible) meshes.push(ring.mesh);
+    for (const cr of ring.completedRings) {
+      if (cr.mesh.visible) meshes.push(cr.mesh);
+    }
   }
   return meshes;
 }
@@ -373,18 +457,25 @@ export function handleRingClick(mesh) {
     return true;
   }
 
-  // Category ring
+  // Check completed ring sub-stacks first
+  if (mesh.userData.isCompletedRing) {
+    const category = mesh.userData.category;
+    const ring = categoryRings.find(r => r.category.key === category);
+    if (ring) {
+      const cr = ring.completedRings.find(c => c.mesh === mesh);
+      if (cr && cr.analysis && onViewAnalysis) {
+        onViewAnalysis(cr.analysis);
+        return true;
+      }
+    }
+  }
+
+  // Category active ring
   const category = mesh.userData.category;
   if (!category) return false;
 
   const ring = categoryRings.find(r => r.category.key === category);
   if (!ring) return false;
-
-  if (ring.completed && ring.analysis) {
-    // Completed → view analysis
-    if (onViewAnalysis) onViewAnalysis(ring.analysis);
-    return true;
-  }
 
   // Check if available (threshold met)
   const progress = getCategoryProgress(category, currentEntries);

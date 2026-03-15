@@ -64,7 +64,7 @@ export function getColorMode() {
 // ── Toggle button (DOM overlay) ─────────────────────────────────────────────
 
 /**
- * Build a small toggle button in the upper-right corner.
+ * Build a small toggle button aligned with the view cube (right: 24px, width: 100px).
  * @param {function} onClick  callback invoked when the button is clicked
  */
 export function initColorModeToggle(onClick) {
@@ -72,7 +72,10 @@ export function initColorModeToggle(onClick) {
   Object.assign(toggleEl.style, {
     position:       'fixed',
     top:            '20px',
-    right:          '20px',
+    right:          '24px',
+    width:          '100px',
+    textAlign:      'center',
+    boxSizing:      'border-box',
     zIndex:         '100',
     padding:        '6px 14px',
     fontFamily:     'monospace',

@@ -2,11 +2,11 @@
  * readOverlay.js — Type A popup: read-only overlay for a filled bead.
  *
  * Displays entry content, date, color swatch, mood, and milestone label
- * as a CSS3DObject positioned above the bead.
+ * as a fixed-position DOM element sized to the viewport (not 3D space).
+ * Positioned near the bead's screen projection, clamped to the viewport.
  */
 
-import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-import { css3dScene, registerPanel, unregisterPanel } from '../renderer.js';
+import { getActiveCamera } from '../renderer.js';
 
 let activeOverlay = null;
 
@@ -15,31 +15,49 @@ const MONTH_NAMES = [
   'July','August','September','October','November','December',
 ];
 
+const POPUP_W = 280;
+const POPUP_OFFSET = 24; // px gap from the bead screen position
+
 function formatDate(isoDate) {
   const d = new Date(isoDate);
   return `${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
 
+/** Project a THREE.Vector3 world position to CSS pixel coords. */
+function _projectToScreen(worldPos) {
+  const cam = getActiveCamera();
+  const v = worldPos.clone().project(cam);
+  return {
+    x: Math.round((v.x + 1) * 0.5 * window.innerWidth),
+    y: Math.round((-v.y + 1) * 0.5 * window.innerHeight),
+  };
+}
+
 /**
- * Open a read overlay above a bead.
+ * Open a read overlay near a bead.
  * @param {object} entry       the journal entry object
  * @param {THREE.Vector3} pos  world-space bead position
  */
 export function openReadOverlay(entry, pos) {
   closeReadOverlay();
 
+  const screen = _projectToScreen(pos);
+
   const div = document.createElement('div');
   Object.assign(div.style, {
+    position:     'fixed',
+    width:        `${POPUP_W}px`,
     background:   'rgba(20, 12, 4, 0.92)',
     border:       '1px solid rgba(245, 166, 35, 0.4)',
     color:        '#fff5e6',
     padding:      '18px 20px',
     borderRadius: '10px',
-    width:        '260px',
     fontFamily:   'monospace',
     fontSize:     '13px',
     lineHeight:   '1.5',
     pointerEvents:'none',
+    zIndex:       '150',
+    boxSizing:    'border-box',
   });
 
   // Date
@@ -105,25 +123,35 @@ export function openReadOverlay(entry, pos) {
   }
 
   div.appendChild(row);
+  document.getElementById('app').appendChild(div);
 
-  // Wrap in CSS3DObject
-  const panel = new CSS3DObject(div);
-  panel.scale.setScalar(0.05);
+  // Position after appending so we can measure height
+  requestAnimationFrame(() => {
+    const popupH = div.offsetHeight || 140;
+    const margin = 12; // keep inside viewport
 
-  // Position above the bead
-  panel.position.copy(pos);
-  panel.position.y += 3;
+    // Try right of bead first, then left
+    let left = screen.x + POPUP_OFFSET;
+    if (left + POPUP_W > window.innerWidth - margin) {
+      left = screen.x - POPUP_W - POPUP_OFFSET;
+    }
+    left = Math.max(margin, Math.min(left, window.innerWidth - POPUP_W - margin));
 
-  css3dScene.add(panel);
-  registerPanel(panel, pos);
-  activeOverlay = panel;
+    // Vertically centered on the bead, clamped to viewport
+    let top = screen.y - popupH / 2;
+    top = Math.max(margin, Math.min(top, window.innerHeight - popupH - margin));
+
+    div.style.left = `${left}px`;
+    div.style.top  = `${top}px`;
+  });
+
+  activeOverlay = div;
 }
 
 /** Close the active read overlay. */
 export function closeReadOverlay() {
   if (activeOverlay) {
-    unregisterPanel(activeOverlay);
-    css3dScene.remove(activeOverlay);
+    activeOverlay.remove();
     activeOverlay = null;
   }
 }

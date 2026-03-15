@@ -101,12 +101,28 @@ function buildGround() {
   scene.add(groundMesh);
 }
 
-// ── Spiral builder ──────────────────────────────────────────────────────────
+// ── Spiral builder (animated loop-by-loop) ──────────────────────────────────
+let spiralAnimId  = null;   // rAF id for in-flight animation
+let animatedCamY  = 8;      // camera Y driven by spiral growth animation
+const SPIRAL_MAT_OPTS = {
+  color: 0xfff5e6,
+  emissive: 0xffecd4,
+  emissiveIntensity: 0.35,
+  metalness: 0.3,
+  roughness: 0.55,
+};
+
 function rebuildSpiral(birthYear) {
   const today = new Date();
-  const birthday = new Date(birthYear, 0, 1); // Jan 1 of birth year
+  const birthday = new Date(birthYear, 0, 1);
 
   if (birthday >= today) return;
+
+  // Cancel any in-flight animation
+  if (spiralAnimId !== null) {
+    cancelAnimationFrame(spiralAnimId);
+    spiralAnimId = null;
+  }
 
   currentBirthday = birthday;
   const totalMs = today - birthday;
@@ -120,27 +136,66 @@ function rebuildSpiral(birthYear) {
     spiralMesh = null;
   }
 
-  // Build new spiral
-  const numPoints = 2000;
-  const points = [];
+  // Compute full set of points
+  const totalYears = totalMs / (DAYS_IN_YEAR * MS_PER_DAY);
+  const pointsPerYear = 100;
+  const numPoints = Math.ceil(totalYears * pointsPerYear);
+  const allPoints = [];
   for (let i = 0; i <= numPoints; i++) {
     const fraction = i / numPoints;
     const date = new Date(birthday.getTime() + fraction * totalMs);
-    points.push(dateToPosition(date, birthday));
+    allPoints.push(dateToPosition(date, birthday));
   }
 
-  const curve = new THREE.CatmullRomCurve3(points);
-  const tubeGeo = new THREE.TubeGeometry(curve, numPoints, 0.15, 8, false);
-  const tubeMat = new THREE.MeshStandardMaterial({
-    color: 0xfff5e6,
-    emissive: 0xffecd4,
-    emissiveIntensity: 0.35,
-    metalness: 0.3,
-    roughness: 0.55,
-  });
+  // Animate loop by loop: reveal one year at a time
+  const totalLoops = Math.ceil(totalYears);
+  let currentLoop = 0;
+  const MS_PER_LOOP = 80;
+  let lastTime = performance.now();
+  let accumulator = 0;
 
-  spiralMesh = new THREE.Mesh(tubeGeo, tubeMat);
-  scene.add(spiralMesh);
+  // Material reused across rebuilds
+  const tubeMat = new THREE.MeshStandardMaterial(SPIRAL_MAT_OPTS);
+
+  function animateSpiral(now) {
+    accumulator += now - lastTime;
+    lastTime = now;
+
+    // Advance loops based on elapsed time
+    let loopsToAdvance = Math.floor(accumulator / MS_PER_LOOP);
+    if (loopsToAdvance > 0) {
+      accumulator -= loopsToAdvance * MS_PER_LOOP;
+      currentLoop = Math.min(currentLoop + loopsToAdvance, totalLoops);
+
+      // How many points to show for currentLoop years
+      const fraction = Math.min(currentLoop / totalYears, 1);
+      const pointCount = Math.max(2, Math.floor(fraction * numPoints));
+      const subPoints = allPoints.slice(0, pointCount + 1);
+
+      // Remove old mesh
+      if (spiralMesh) {
+        scene.remove(spiralMesh);
+        spiralMesh.geometry.dispose();
+      }
+
+      const curve = new THREE.CatmullRomCurve3(subPoints);
+      const tubeGeo = new THREE.TubeGeometry(curve, subPoints.length, 0.15, 8, false);
+      spiralMesh = new THREE.Mesh(tubeGeo, tubeMat);
+      scene.add(spiralMesh);
+
+      // Camera tracks spiral growth
+      const currentLoopY = subPoints[subPoints.length - 1].y;
+      animatedCamY = Math.max(8, currentLoopY * 0.4);
+    }
+
+    if (currentLoop < totalLoops) {
+      spiralAnimId = requestAnimationFrame(animateSpiral);
+    } else {
+      spiralAnimId = null;
+    }
+  }
+
+  spiralAnimId = requestAnimationFrame(animateSpiral);
 }
 
 // ── Animation loop ──────────────────────────────────────────────────────────
@@ -152,8 +207,8 @@ function animate() {
   rotationAngle += ROTATION_SPEED * (1 / 60);
   const radius = 90;
 
-  // Camera Y rises with spiral — stays at ~40% height for nice view
-  const camY = spiralTopY > 0 ? Math.max(8, spiralTopY * 0.4) : 8;
+  // Camera Y driven by spiral growth animation
+  const camY = animatedCamY;
 
   camera.position.x = radius * Math.sin(rotationAngle);
   camera.position.z = radius * Math.cos(rotationAngle);
@@ -259,8 +314,8 @@ function startMilestonePrompts(birthYear) {
       (m.optional ? '<br><span class="milestone-optional">Optional — skip if preferred</span>' : '');
     overlay.classList.add('visible');
 
-    // Show "Take me to the app" after first prompt
-    if (index >= 1) {
+    // Show "Take me to the app" from the first milestone prompt
+    if (index >= 0) {
       btnGoToApp.classList.add('visible');
     }
   }

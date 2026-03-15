@@ -9,22 +9,39 @@
  *   – Default clipY = spiralTopY  →  nothing clipped, full spiral visible
  *   – Moving slider down  →  clipY decreases  →  recent years hidden
  *   – Ground plane at y=0 always satisfies 0 ≤ clipY  →  always visible
+ *
+ * UI layout: right-aligned column (right: 24px, width: 100px) matching
+ * the view cube, positioned between the mood button (top) and the cube
+ * (bottom).  Slider spans the full available vertical space.  A year
+ * label floats to the left of the handle and tracks its position.
+ *
+ * An end-cap disc is placed at the spiral path position of the current
+ * cut Y to give the appearance of a clean perpendicular cut.
  */
 
 import * as THREE from 'three';
-import { webgl } from './renderer.js';
+import { webgl, scene } from './renderer.js';
+import { dateToPosition } from './spiralMath.js';
 
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY   = 86400000;
+
+// Slider sits between the mood button bottom (~52px) and the view cube top (~124px from bottom).
+// These constants keep the slider flush with those two landmarks.
+const SLIDER_TOP    = '60px';   // just below the 20px+32px mood button
+const SLIDER_BOTTOM = '132px';  // 24px margin + 100px cube + 8px gap
+const SLIDER_RIGHT  = '24px';   // same right edge as view cube
+const SLIDER_WIDTH  = '100px';  // same width as view cube
 
 let clipPlane        = null;
 let detailUpperPlane = null; // detail view: y <= targetY + 5
 let detailLowerPlane = null; // detail view: y >= targetY - 8
 let birthdayDate    = null;
 let sliderEl        = null;
-let labelEl         = null;
 let trackEl         = null;
 let handleEl        = null;
+let yearLabelEl     = null;
+let capMesh         = null;   // end-cap disc at cut position
 let _spiralTopY     = 0;
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -46,20 +63,15 @@ export function initSectionCut(spiralTopY, birthday) {
   webgl.clippingPlanes = [clipPlane];
 
   _buildSliderUI(spiralTopY);
+  _buildEndCap(spiralTopY);
 }
 
-/** Update the clip-plane height and year label. */
+/** Update the clip-plane height, year label, and end-cap position. */
 export function setSectionCutY(y) {
   if (!clipPlane) return;
   clipPlane.constant = y;
-
-  if (birthdayDate && labelEl) {
-    const yearsElapsed = y / 8;
-    const cutDate = new Date(
-      birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY
-    );
-    labelEl.textContent = `Section Cut: ${cutDate.getFullYear()}`;
-  }
+  _updateYearLabel(y);
+  _updateEndCap(y);
 }
 
 /** Get the current clip-plane Y value. */
@@ -97,90 +109,118 @@ export function clearDetailClipWindow() {
 
 export function showSectionCutSlider() {
   if (sliderEl) sliderEl.style.display = 'flex';
+  if (capMesh)  capMesh.visible = true;
 }
 
 export function hideSectionCutSlider() {
   if (sliderEl) sliderEl.style.display = 'none';
+  if (capMesh)  capMesh.visible = false;
+}
+
+// ── End-cap disc ─────────────────────────────────────────────────────────────
+
+function _buildEndCap(spiralTopY) {
+  // Small horizontal disc that caps the open end of the clipped spiral tube.
+  const capGeo = new THREE.CircleGeometry(0.2, 12);
+  const capMat = new THREE.MeshStandardMaterial({
+    color:             0xfff5e6,
+    emissive:          0xffecd4,
+    emissiveIntensity: 0.35,
+    metalness:         0.3,
+    roughness:         0.55,
+    side:              THREE.DoubleSide,
+    transparent:       true,
+  });
+  capMesh = new THREE.Mesh(capGeo, capMat);
+  capMesh.rotation.x = -Math.PI / 2; // lay flat in XZ plane
+  capMesh.visible = false; // hidden until slider is shown
+  scene.add(capMesh);
+  _updateEndCap(spiralTopY);
+}
+
+function _updateEndCap(y) {
+  if (!capMesh || !birthdayDate) return;
+  const yearsElapsed = y / 8;
+  const cutDate = new Date(birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
+  const pos = dateToPosition(cutDate, birthdayDate);
+  capMesh.position.set(pos.x, y, pos.z);
+}
+
+// ── Year label helper ────────────────────────────────────────────────────────
+
+function _updateYearLabel(y) {
+  if (!birthdayDate || !yearLabelEl) return;
+  const yearsElapsed = y / 8;
+  const cutDate = new Date(birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
+  yearLabelEl.textContent = cutDate.getFullYear();
 }
 
 // ── Slider UI ───────────────────────────────────────────────────────────────
 
 function _buildSliderUI(spiralTopY) {
-  // Outer container — fixed on right side of viewport
+  // Outer container — fixed on right side, aligned with view cube
   sliderEl = document.createElement('div');
   Object.assign(sliderEl.style, {
     position:      'fixed',
-    right:         '36px',
-    top:           '12%',
-    height:        '76%',
-    width:         '36px',
+    right:         SLIDER_RIGHT,
+    top:           SLIDER_TOP,
+    bottom:        SLIDER_BOTTOM,
+    width:         SLIDER_WIDTH,
     display:       'flex',
     flexDirection: 'column',
     alignItems:    'center',
-    gap:           '10px',
     zIndex:        '100',
     userSelect:    'none',
     pointerEvents: 'auto',
+    boxSizing:     'border-box',
   });
 
-  // "SECTION CUT" heading (rotated to read upward along the track)
-  const heading = document.createElement('div');
-  Object.assign(heading.style, {
-    color:         'rgba(255,245,230,0.45)',
-    fontFamily:    'sans-serif',
-    fontSize:      '9px',
-    letterSpacing: '2px',
-    textTransform: 'uppercase',
-    writingMode:   'vertical-rl',
-    transform:     'rotate(180deg)',
-    pointerEvents: 'none',
-  });
-  heading.textContent = 'Section Cut';
-
-  // Year label below heading
-  labelEl = document.createElement('div');
-  Object.assign(labelEl.style, {
-    color:         'rgba(255,245,230,0.75)',
-    fontFamily:    'sans-serif',
-    fontSize:      '10px',
-    letterSpacing: '1px',
-    writingMode:   'vertical-rl',
-    transform:     'rotate(180deg)',
-    pointerEvents: 'none',
-  });
-  // Initial label: no cut yet, show the top year
-  const today = new Date();
-  labelEl.textContent = `Section Cut: ${today.getFullYear()}`;
-
-  // Vertical track
+  // Vertical track — fills all available height
   trackEl = document.createElement('div');
   Object.assign(trackEl.style, {
-    flex:           '1',
-    width:          '2px',
-    background:     'rgba(255,245,230,0.2)',
-    borderRadius:   '1px',
-    position:       'relative',
-    cursor:         'pointer',
+    flex:         '1',
+    width:        '2px',
+    background:   'rgba(255,245,230,0.2)',
+    borderRadius: '1px',
+    position:     'relative',
+    cursor:       'pointer',
   });
 
   // Draggable handle — starts at top (no cut)
   handleEl = document.createElement('div');
   Object.assign(handleEl.style, {
-    position:        'absolute',
-    width:           '14px',
-    height:          '14px',
-    background:      'rgba(255,245,230,0.85)',
-    borderRadius:    '50%',
-    left:            '50%',
-    top:             '0%',
-    transform:       'translate(-50%, -50%)',
-    cursor:          'grab',
-    boxShadow:       '0 0 6px rgba(255,245,230,0.4)',
+    position:    'absolute',
+    width:       '14px',
+    height:      '14px',
+    background:  'rgba(255,245,230,0.85)',
+    borderRadius:'50%',
+    left:        '50%',
+    top:         '0%',
+    transform:   'translate(-50%, -50%)',
+    cursor:      'grab',
+    boxShadow:   '0 0 6px rgba(255,245,230,0.4)',
   });
 
+  // Year label — floats to the left of the handle, tracks its Y position
+  yearLabelEl = document.createElement('div');
+  Object.assign(yearLabelEl.style, {
+    position:      'absolute',
+    right:         'calc(100% + 10px)',
+    top:           '0%',
+    transform:     'translateY(-50%)',
+    color:         'rgba(255,245,230,0.75)',
+    fontFamily:    'monospace',
+    fontSize:      '11px',
+    letterSpacing: '1px',
+    whiteSpace:    'nowrap',
+    pointerEvents: 'none',
+  });
+  // Initialize year label with the top-year (no cut)
+  const today = new Date();
+  yearLabelEl.textContent = today.getFullYear();
+
   trackEl.appendChild(handleEl);
-  sliderEl.appendChild(heading);
-  sliderEl.appendChild(labelEl);
+  trackEl.appendChild(yearLabelEl);
   sliderEl.appendChild(trackEl);
   document.getElementById('app').appendChild(sliderEl);
 
@@ -188,7 +228,7 @@ function _buildSliderUI(spiralTopY) {
 }
 
 function _initDrag(spiralTopY) {
-  let dragging  = false;
+  let dragging    = false;
   let startClientY = 0;
   let startTopFrac = 0; // 0 = top of track, 1 = bottom
 
@@ -233,7 +273,8 @@ function _initDrag(spiralTopY) {
  * frac = 1 → handle at bottom → clipY = 0 (only ground visible)
  */
 function _applyFraction(frac, spiralTopY) {
-  handleEl.style.top = `${frac * 100}%`;
+  handleEl.style.top    = `${frac * 100}%`;
+  yearLabelEl.style.top = `${frac * 100}%`;
   const clipY = spiralTopY * (1 - frac);
   setSectionCutY(clipY);
 }

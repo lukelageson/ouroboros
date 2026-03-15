@@ -22,8 +22,9 @@ const meshMap = new Map();
 
 /**
  * Create a single bead mesh and add it to the scene.
+ * @param {boolean} animate  if true, scale from 0 to 1 over 400ms with ease-out
  */
-export function addBead(entry, birthday) {
+export function addBead(entry, birthday, animate = false) {
   const isMilestone = !!entry.is_milestone;
   const geo   = isMilestone ? milestoneGeo : standardGeo;
   const color = new THREE.Color(entry.color);
@@ -37,13 +38,27 @@ export function addBead(entry, birthday) {
   });
 
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.userData.entryId = entry.id;
+  mesh.userData.entryId     = entry.id;
+  mesh.userData.isMilestone = isMilestone;
 
   const pos = dateToPosition(new Date(entry.entry_date), birthday);
   mesh.position.copy(pos);
 
   mesh.castShadow    = true;
   mesh.receiveShadow = true;
+
+  if (animate) {
+    mesh.scale.set(0, 0, 0);
+    const start = performance.now();
+    const duration = 400;
+    function tick() {
+      const t = Math.min((performance.now() - start) / duration, 1);
+      const s = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      mesh.scale.set(s, s, s);
+      if (t < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
 
   scene.add(mesh);
   meshMap.set(entry.id, mesh);

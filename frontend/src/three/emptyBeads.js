@@ -21,6 +21,7 @@ let instancedMesh = null;
 let opacityAttr   = null;
 let instancePositions = []; // THREE.Vector3[] parallel to instance indices
 let instanceDates     = []; // ISO date strings parallel to instance indices
+let _hoveredInstanceId = -1; // instance currently under the cursor
 
 // Reusable temporaries for per-frame distance calc
 const _ray    = new THREE.Raycaster();
@@ -131,8 +132,11 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
   const count = arr.length;
 
   if (viewMode === 'plan') {
-    // Plan view: all empties at constant opacity
+    // Plan view: all empties at constant opacity; hovered one at full
     for (let i = 0; i < count; i++) arr[i] = 0.82;
+    if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count) {
+      arr[_hoveredInstanceId] = 1.0;
+    }
     opacityAttr.needsUpdate = true;
     return;
   }
@@ -188,6 +192,11 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
     arr[i] = Math.max(0, 1 - dist / REVEAL_DIST);
   }
 
+  // Hovered instance always at full opacity
+  if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count) {
+    arr[_hoveredInstanceId] = 1.0;
+  }
+
   opacityAttr.needsUpdate = true;
 }
 
@@ -197,6 +206,14 @@ export function hideAllEmptyBeads() {
   const arr = opacityAttr.array;
   for (let i = 0; i < arr.length; i++) arr[i] = 0;
   opacityAttr.needsUpdate = true;
+}
+
+/**
+ * Set which instance is currently hovered so showEmptyBeadsNearMouse
+ * can boost its opacity to maximum for a clear highlight.
+ */
+export function setHoveredEmptyBead(instanceId) {
+  _hoveredInstanceId = instanceId;
 }
 
 /** Get the InstancedMesh (for raycasting). */

@@ -30,10 +30,14 @@ import { initBeads, addBead, getAllBeadMeshes } from './three/beads.js';
 import {
   initEmptyBeads, showEmptyBeadsNearMouse,
   getEmptyBeadMesh, getEmptyBeadDate, removeEmptyBeadInstance,
+  setHoveredEmptyBead,
 } from './three/emptyBeads.js';
 import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
 import { setPanelViewMode }                     from './three/panelManager.js';
 import { openReadOverlay, closeReadOverlay }    from './three/popups/readOverlay.js';
+import {
+  openReadOverlay2D, closeReadOverlay2D,
+} from './three/popups/readOverlay2D.js';
 import {
   openCreatePanel, closeCreatePanel, isCreatePanelOpen,
 } from './three/popups/createPanel.js';
@@ -54,6 +58,9 @@ import {
   applyBelongingIndicators,
 } from './three/analysisViewingMode.js';
 import { showAnnotation, hideAnnotation } from './three/popups/analysisAnnotation.js';
+import {
+  initDetailTextLayer, updateDetailTextLayer, refreshDetailEntries,
+} from './three/popups/detailTextLayer.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -79,6 +86,7 @@ initViewCube(webgl, camera, controls, (mode) => {
     panDate = new Date(today);
     setViewMode('detail', effectiveTop, { panPos: todayPos });
   } else {
+    closeReadOverlay2D();
     setViewMode(mode, effectiveTop);
   }
 });
@@ -103,8 +111,10 @@ registerFrameCallback(() => {
     setDetailClipWindow(detailTargetY);
     updateSpiralDetailMode(detailTargetY);
     _updateDetailYearIndicator(detailTargetY);
+    updateDetailTextLayer(detailTargetY, 'detail');
     if (ground) ground.visible = false;
   } else {
+    updateDetailTextLayer(0, mode || 'perspective');
     clearDetailClipWindow();
     clearSpiralDetailMode();
     _hideDetailYearIndicator();
@@ -224,7 +234,11 @@ canvas.addEventListener('click', (e) => {
       const entry = loadedEntries.find(en => en.id === mesh.userData.entryId);
       if (entry) {
         closeCreatePanel();
-        openReadOverlay(entry, mesh.position);
+        if (mode === 'detail') {
+          openReadOverlay2D(entry);
+        } else {
+          openReadOverlay(entry, mesh.position);
+        }
         return;
       }
     }
@@ -254,6 +268,7 @@ canvas.addEventListener('click', (e) => {
 
   // ── 3. Close any open overlay/panel on empty click ───────────────────
   closeReadOverlay();
+  closeReadOverlay2D();
   closeCreatePanel();
   if (isInAnalysisViewingMode()) {
     hideAnnotation();
@@ -266,11 +281,13 @@ canvas.addEventListener('click', (e) => {
 
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > effectiveTop - 16) {
+    closeReadOverlay2D();
     setViewMode('plan', effectiveTop);
   } else if (mode === 'plan') {
     const cx = window.innerWidth  / 2;
     const cy = window.innerHeight / 2;
     if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
+      closeReadOverlay2D();
       setViewMode('perspective', effectiveTop);
     }
   }
@@ -324,9 +341,10 @@ function _openCreateForInstance(instanceId) {
     try {
       const newEntry = await api.createEntry(data);
       loadedEntries.push(newEntry);
-      addBead(newEntry, birthday);
+      addBead(newEntry, birthday, true);
       removeEmptyBeadInstance(instanceId);
       updateProgress(loadedEntries);
+      refreshDetailEntries(loadedEntries);
       closeCreatePanel();
     } catch (err) {
       console.error('Failed to create entry:', err);
@@ -414,9 +432,66 @@ registerFrameCallback((cam) => {
   showEmptyBeadsNearMouse(lastMouseEvent, cam, mode);
 });
 
-// ── Analysis viewing mode: hover raycasting for Type C annotations ──────────
+// ── Section cut: hide beads that would appear half-cut ──────────────────────
+// In perspective/plan mode, hide any bead whose top extends above the cut plane
+// so no bead ever appears sliced in half.
+registerFrameCallback(() => {
+  const mode = getCurrentMode();
+  if (mode !== 'perspective' && mode !== 'plan') return;
+
+  const clipY = getSectionCutY();
+  const nocut = clipY >= spiralTopY - 0.1; // slider at top = no cut
+
+  for (const mesh of getAllBeadMeshes()) {
+    if (nocut) {
+      mesh.visible = true;
+    } else {
+      const r = mesh.userData.isMilestone ? 0.825 : 0.45;
+      mesh.visible = mesh.position.y + r < clipY + 0.05;
+    }
+  }
+});
+
+// ── Bead hover highlighting ──────────────────────────────────────────────────
 const hoverRaycaster = new THREE.Raycaster();
 const hoverMouse     = new THREE.Vector2();
+let   _hoveredBeadMesh = null;
+
+registerFrameCallback((cam) => {
+  // Skip when analysis viewing mode has its own hover logic
+  if (isInAnalysisViewingMode()) return;
+  if (!lastMouseEvent) return;
+
+  hoverMouse.x =  (lastMouseEvent.clientX / window.innerWidth)  * 2 - 1;
+  hoverMouse.y = -(lastMouseEvent.clientY / window.innerHeight) * 2 + 1;
+  hoverRaycaster.setFromCamera(hoverMouse, cam);
+
+  // ── Filled beads ─────────────────────────────────────────────────────
+  const beadMeshes = getAllBeadMeshes().filter(m => m.visible);
+  const beadHits   = hoverRaycaster.intersectObjects(beadMeshes, false);
+  const newHovered = beadHits.length ? beadHits[0].object : null;
+
+  if (_hoveredBeadMesh !== newHovered) {
+    if (_hoveredBeadMesh) {
+      _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+      _hoveredBeadMesh.scale.setScalar(1.0);
+    }
+    if (newHovered) {
+      newHovered.material.emissiveIntensity = 0.85;
+      newHovered.scale.setScalar(1.2);
+    }
+    _hoveredBeadMesh = newHovered;
+  }
+
+  // ── Empty beads ──────────────────────────────────────────────────────
+  const emptyMesh = getEmptyBeadMesh();
+  let newHoveredEmptyId = -1;
+  if (emptyMesh && !newHovered) {
+    const emptyHits = hoverRaycaster.intersectObject(emptyMesh, false);
+    if (emptyHits.length) newHoveredEmptyId = emptyHits[0].instanceId;
+  }
+  setHoveredEmptyBead(newHoveredEmptyId);
+});
 
 registerFrameCallback((cam) => {
   if (!isInAnalysisViewingMode() || !lastMouseEvent) return;
@@ -475,6 +550,7 @@ let loadedEntries = [];
 async function loadEntries() {
   loadedEntries = await api.getEntries();
   initBeads(loadedEntries, birthday);
+  initDetailTextLayer(loadedEntries, birthday);
 
   // Empty beads for all unfilled dates
   const filledDates = loadedEntries.map(e => e.entry_date);
@@ -557,8 +633,9 @@ async function loadEntries() {
     try {
       const newEntry = await api.createEntry(data);
       loadedEntries.push(newEntry);
-      addBead(newEntry, birthday);
+      addBead(newEntry, birthday, true);
       updateProgress(loadedEntries);
+      refreshDetailEntries(loadedEntries);
       // Find and hide the matching empty bead instance
       const emptyMesh = getEmptyBeadMesh();
       if (emptyMesh) {
