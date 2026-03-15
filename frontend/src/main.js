@@ -37,6 +37,9 @@ import { openReadOverlay, closeReadOverlay }    from './three/popups/readOverlay
 import {
   openCreatePanel, closeCreatePanel, isCreatePanelOpen,
 } from './three/popups/createPanel.js';
+import {
+  initTodaysBubble, dismissTodaysBubble,
+} from './three/todaysBubble.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -321,6 +324,31 @@ async function loadEntries() {
 
   // Mood / Category toggle
   initColorModeToggle(() => toggleColorMode(loadedEntries));
+
+  // Today's bubble: amber glow + create panel if no entry for today
+  initTodaysBubble(birthday, loadedEntries, async (data) => {
+    try {
+      const newEntry = await api.createEntry(data);
+      loadedEntries.push(newEntry);
+      addBead(newEntry, birthday);
+      // Find and hide the matching empty bead instance
+      const emptyMesh = getEmptyBeadMesh();
+      if (emptyMesh) {
+        // Search for the instance matching today's date
+        const todayISO = new Date().toISOString().slice(0, 10);
+        // Walk empty bead dates to find the instance index
+        for (let i = 0; i < emptyMesh.count; i++) {
+          if (getEmptyBeadDate(i) === todayISO) {
+            removeEmptyBeadInstance(i);
+            break;
+          }
+        }
+      }
+      closeCreatePanel();
+    } catch (err) {
+      console.error('Failed to create entry from today\'s bubble:', err);
+    }
+  });
 }
 
 function buildLoginForm() {
