@@ -8,7 +8,7 @@ import { updateRibbonLabels }                  from './three/ribbon.js';
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
-  panDetailView,
+  panDetailView, setPlanTargetY,
 } from './three/cameraController.js';
 import { updateSpiralMaterial } from './three/spiralGeometry.js';
 import { dateToPosition }       from './three/spiralMath.js';
@@ -67,17 +67,20 @@ registerFrameCallback(() => {
   updateSpiralMaterial(isPlanMode());
   updateViewCube();
 
-  // Show / hide section-cut slider based on settled view mode
+  // Show section cut slider in perspective and plan views
   const mode = getCurrentMode();
-  if (mode === 'perspective') showSectionCutSlider();
-  else                        hideSectionCutSlider();
+  if (mode === 'perspective' || mode === 'plan') showSectionCutSlider();
+  else                                           hideSectionCutSlider();
+
+  // Plan view: track section cut live
+  if (mode === 'plan') setPlanTargetY(getSectionCutY());
 });
 
 registerFrameCallback((cam) => {
   updateRibbonLabels(
     labels, dividerObjects, ribbonMesh,
     cam, ribbonVisible,
-    isPlanMode(), spiralTopY
+    isPlanMode(), spiralTopY, getSectionCutY()
   );
 });
 

@@ -91,6 +91,17 @@ export function setViewMode(mode, spiralTopY, options = {}) {
 }
 
 /**
+ * Immediately move the plan-view camera to orbit the given Y coordinate.
+ * Used to track the section cut slider live while in settled plan mode.
+ */
+export function setPlanTargetY(clipY) {
+  if (state.viewMode !== 'plan') return;
+  camera.position.set(0, clipY + PLAN_H, 0);
+  controls.target.set(0, clipY, 0);
+  camera.lookAt(controls.target);
+}
+
+/**
  * Pan the detail-view camera to a new world-space point on the spiral.
  * No-op if not currently in (or transitioning to) detail mode.
  */

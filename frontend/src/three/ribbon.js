@@ -218,22 +218,25 @@ export function buildRibbon(birthday, today) {
  *               Removes angular + height culling; shows only the current year's coil.
  * spiralTopY  — Y coordinate of the topmost coil; used to anchor plan-view visibility.
  */
-export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY) {
+/**
+ * @param {number} clipY  current section-cut Y (defaults to spiralTopY = no cut)
+ */
+export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY, clipY = spiralTopY) {
   const u = ribbonMesh.material.uniforms;
 
   if (planMode) {
-    // Tight ribbon shader window: one year centred just below the top coil.
-    // heightRadius=6 → fully visible from spiralTopY-7.6 to spiralTopY+0.4; fades beyond.
-    u.cameraY.value      = spiralTopY - 4;
+    // Tight ribbon shader window centred just below the section cut.
+    // heightRadius=6 → fully visible within ~1 year band below clipY.
+    u.cameraY.value      = clipY - 4;
     u.cameraHDist.value  = 0;
     u.heightRadius.value = 6;
 
-    // Deduplicate month labels: keep only the MOST RECENT label for each month (0–11).
-    // This eliminates the double-March problem and guarantees exactly 12 visible labels.
-    // Year-boundary labels (year numbers) are always hidden in plan view.
-    const latestByMonth = new Map(); // month → label with highest y
+    // Deduplicate month labels: keep the most recent label for each month (0–11)
+    // that is at or below clipY.  Year-boundary labels always hidden in plan view.
+    const latestByMonth = new Map();
     for (const label of labels) {
       if (label.userData.isYearBoundary) continue;
+      if (label.userData.y > clipY + 0.5) continue; // above cut, skip
       const m = label.userData.month;
       if (!latestByMonth.has(m) || label.userData.y > latestByMonth.get(m).userData.y) {
         latestByMonth.set(m, label);
@@ -245,7 +248,7 @@ export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, r
       label.visible = ribbonVisible && latestSet.has(label);
     }
     for (const seg of dividerObjects) {
-      seg.visible = ribbonVisible && seg.userData.y >= spiralTopY - 8;
+      seg.visible = ribbonVisible && seg.userData.y >= clipY - 8 && seg.userData.y <= clipY + 0.5;
     }
 
   } else {
