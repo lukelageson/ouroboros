@@ -43,7 +43,7 @@ initRenderer();
 const {
   ribbonMesh, dividerObjects, labels,
   spiralTopY, spiral,
-  birthday, today,
+  birthday, today, ground,
 } = initScene();
 
 let ribbonVisible = true;
@@ -86,10 +86,12 @@ registerFrameCallback(() => {
     setDetailClipWindow(detailTargetY);
     updateSpiralDetailMode(detailTargetY);
     _updateDetailYearIndicator(detailTargetY);
+    if (ground) ground.visible = false;
   } else {
     clearDetailClipWindow();
     clearSpiralDetailMode();
     _hideDetailYearIndicator();
+    if (ground) ground.visible = true;
   }
 
   // Tell panelManager the settled view mode so it scales/orients popups correctly

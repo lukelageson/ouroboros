@@ -12,7 +12,7 @@ import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
 const EMPTY_R     = 0.3;
-const EMPTY_COLOR = 0x3d2e1e;
+const EMPTY_COLOR = 0xc8a870; // warm sand — visible against dark background
 const MS_PER_DAY  = 86400000;
 const REVEAL_DIST = 15;   // scene units — full opacity at 0, zero at this distance
 const ZOOM_GATE   = 60;   // camera must be closer than this to spiral surface
@@ -62,12 +62,14 @@ export function initEmptyBeads(birthday, filledDates) {
   // Geometry + material
   const geo = new THREE.SphereGeometry(EMPTY_R, 6, 4);
   const mat = new THREE.MeshStandardMaterial({
-    color:       EMPTY_COLOR,
-    transparent: true,
-    opacity:     1.0,
-    depthWrite:  false,
-    metalness:   0.1,
-    roughness:   0.8,
+    color:             EMPTY_COLOR,
+    emissive:          0x7a5020,
+    emissiveIntensity: 0.5,
+    transparent:       true,
+    opacity:           1.0,
+    depthWrite:        false,
+    metalness:         0.15,
+    roughness:         0.65,
   });
 
   // Inject per-instance opacity into the shader
@@ -130,7 +132,7 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
 
   if (viewMode === 'plan') {
     // Plan view: all empties at constant opacity
-    for (let i = 0; i < count; i++) arr[i] = 0.4;
+    for (let i = 0; i < count; i++) arr[i] = 0.82;
     opacityAttr.needsUpdate = true;
     return;
   }
@@ -145,7 +147,7 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
       let angDiff = Math.atan2(p.z, p.x) - camAngle;
       if (angDiff >  Math.PI) angDiff -= 2 * Math.PI;
       if (angDiff < -Math.PI) angDiff += 2 * Math.PI;
-      arr[i] = (dy < 8 && Math.abs(angDiff) < 1.0) ? 0.55 : 0;
+      arr[i] = (dy < 8 && Math.abs(angDiff) < 1.0) ? 0.88 : 0;
     }
     opacityAttr.needsUpdate = true;
     return;
@@ -183,7 +185,7 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
     const dist = p.distanceTo(_proj);
 
     // Smooth falloff: 1 at dist=0, 0 at dist=REVEAL_DIST
-    arr[i] = Math.max(0, 1 - dist / REVEAL_DIST) * 0.9;
+    arr[i] = Math.max(0, 1 - dist / REVEAL_DIST);
   }
 
   opacityAttr.needsUpdate = true;

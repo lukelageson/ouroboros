@@ -51,5 +51,5 @@ export function initScene() {
   for (const seg of dividerObjects) scene.add(seg);
   for (const label of labels) css3dScene.add(label);
 
-  return { ribbonMesh, dividerObjects, labels, spiralTopY, spiral, birthday, today };
+  return { ribbonMesh, dividerObjects, labels, spiralTopY, spiral, birthday, today, ground };
 }
