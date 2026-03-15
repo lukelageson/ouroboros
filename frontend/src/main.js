@@ -16,6 +16,7 @@ import {
   initSectionCut,
   showSectionCutSlider,
   hideSectionCutSlider,
+  getSectionCutY,
 } from './three/sectionCut.js';
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
@@ -51,11 +52,12 @@ hideSectionCutSlider(); // hidden until perspective view is active
 
 // ── View Cube ───────────────────────────────────────────────────────────────
 initViewCube(webgl, camera, controls, (mode) => {
+  const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'detail') {
     panDate = new Date(today);
-    setViewMode('detail', spiralTopY, { panPos: todayPos });
+    setViewMode('detail', effectiveTop, { panPos: todayPos });
   } else {
-    setViewMode(mode, spiralTopY);
+    setViewMode(mode, effectiveTop);
   }
 });
 
@@ -139,7 +141,7 @@ canvas.addEventListener('click', (e) => {
   if (isInCubeArea(e.clientX, e.clientY)) return;
 
   const mode = getCurrentMode();
-  if (mode !== 'perspective' && mode !== 'plan') return;
+  if (mode !== 'perspective' && mode !== 'plan' && mode !== 'detail') return;
 
   // Build NDC from click position
   clickMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
@@ -191,13 +193,14 @@ canvas.addEventListener('click', (e) => {
   // ── 4. Surface-click navigation (legacy) ─────────────────────────────
   const spiralHits = clickRaycaster.intersectObject(spiral, false);
 
-  if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > spiralTopY - 16) {
-    setViewMode('plan', spiralTopY);
+  const effectiveTop = Math.min(spiralTopY, getSectionCutY());
+  if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > effectiveTop - 16) {
+    setViewMode('plan', effectiveTop);
   } else if (mode === 'plan') {
     const cx = window.innerWidth  / 2;
     const cy = window.innerHeight / 2;
     if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
-      setViewMode('perspective', spiralTopY);
+      setViewMode('perspective', effectiveTop);
     }
   }
 });

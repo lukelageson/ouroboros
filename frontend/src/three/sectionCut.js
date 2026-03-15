@@ -60,6 +60,11 @@ export function setSectionCutY(y) {
   }
 }
 
+/** Get the current clip-plane Y value. */
+export function getSectionCutY() {
+  return clipPlane ? clipPlane.constant : _spiralTopY;
+}
+
 export function showSectionCutSlider() {
   if (sliderEl) sliderEl.style.display = 'flex';
 }

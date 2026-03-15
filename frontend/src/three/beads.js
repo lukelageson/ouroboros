@@ -10,8 +10,8 @@ import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
-const STANDARD_R  = 0.6;
-const MILESTONE_R = 1.1;
+const STANDARD_R  = 0.45;
+const MILESTONE_R = 0.825;
 
 // Shared geometries — one per size to avoid duplicating vertex buffers
 const standardGeo  = new THREE.SphereGeometry(STANDARD_R,  16, 12);

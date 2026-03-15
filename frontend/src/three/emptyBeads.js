@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
-const EMPTY_R     = 0.4;
+const EMPTY_R     = 0.3;
 const EMPTY_COLOR = 0x3d2e1e;
 const MS_PER_DAY  = 86400000;
 const REVEAL_DIST = 15;   // scene units — full opacity at 0, zero at this distance
@@ -135,6 +135,24 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
     return;
   }
 
+  if (viewMode === 'detail') {
+    // Detail view: show empties near camera at constant opacity
+    const camXZ = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2);
+    const camY  = cam.position.y;
+    for (let i = 0; i < count; i++) {
+      const p = instancePositions[i];
+      const dy = Math.abs(p.y - camY);
+      // Angular distance on the spiral
+      const angDist = Math.abs(
+        Math.atan2(p.z, p.x) - Math.atan2(cam.position.z, cam.position.x)
+      );
+      const near = dy < 12 && angDist < 1.2;
+      arr[i] = near ? 0.5 : 0;
+    }
+    opacityAttr.needsUpdate = true;
+    return;
+  }
+
   if (viewMode !== 'perspective' || !mouseEvent) {
     hideAllEmptyBeads();
     return;
@@ -167,7 +185,7 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
     const dist = p.distanceTo(_proj);
 
     // Smooth falloff: 1 at dist=0, 0 at dist=REVEAL_DIST
-    arr[i] = Math.max(0, 1 - dist / REVEAL_DIST) * 0.6;
+    arr[i] = Math.max(0, 1 - dist / REVEAL_DIST) * 0.9;
   }
 
   opacityAttr.needsUpdate = true;
