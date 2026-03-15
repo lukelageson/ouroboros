@@ -447,14 +447,14 @@ function buildLoginForm() {
   document.body.appendChild(overlay);
 }
 
-// Check session on load
+// Check session on load — redirect to landing if not authenticated
 (async () => {
   try {
     await api.me();
     await loadEntries();
   } catch (err) {
     if (err.status === 401) {
-      buildLoginForm();
+      window.location.href = '/';
     }
   }
 })();

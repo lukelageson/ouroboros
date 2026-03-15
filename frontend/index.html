@@ -6,12 +6,142 @@
   <title>Ouroboros</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0e0a06; overflow: hidden; }
-    #app { position: relative; width: 100vw; height: 100vh; }
+    body { background: #0e0a06; overflow: hidden; font-family: system-ui, sans-serif; }
+    #landing { position: relative; width: 100vw; height: 100vh; }
+
+    #overlay {
+      position: fixed; inset: 0; z-index: 10;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: flex-start;
+      pointer-events: none;
+    }
+
+    #tagline {
+      margin-top: 12vh;
+      font-size: clamp(1.4rem, 3vw, 2.2rem);
+      color: #fff5e6;
+      letter-spacing: 0.15em;
+      font-weight: 300;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #buttons {
+      position: fixed;
+      bottom: 12vh;
+      display: flex; gap: 24px;
+      pointer-events: auto;
+    }
+
+    #buttons button {
+      padding: 14px 36px;
+      background: transparent;
+      border: 1px solid #f5a623;
+      color: #f5a623;
+      font-family: system-ui, sans-serif;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    #buttons button:hover {
+      background: rgba(245, 166, 35, 0.12);
+    }
+
+    /* ── Auth form ─────────────────────────────────────────────────── */
+    #auth-form-container {
+      display: none;
+      position: fixed; inset: 0; z-index: 20;
+      align-items: center; justify-content: center;
+      background: rgba(14, 10, 6, 0.92);
+      pointer-events: auto;
+    }
+
+    #auth-form-container.visible { display: flex; }
+
+    #auth-form {
+      display: flex; flex-direction: column; gap: 14px;
+      padding: 36px; min-width: 300px;
+      background: #1a1008;
+      border: 1px solid rgba(245,166,35,0.3);
+      border-radius: 8px;
+    }
+
+    #auth-form h2 {
+      margin: 0 0 4px; text-align: center;
+      font-size: 18px; font-weight: 600;
+      letter-spacing: 0.2em; color: #f5a623;
+    }
+
+    #auth-form input {
+      padding: 10px 14px;
+      background: #0d0804;
+      border: 1px solid rgba(245,166,35,0.3);
+      border-radius: 4px;
+      color: #fff5e6;
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+    }
+
+    #auth-form input::placeholder { color: rgba(255,245,230,0.35); }
+
+    #auth-form button[type="submit"] {
+      padding: 12px;
+      background: transparent;
+      border: 1px solid #f5a623;
+      color: #f5a623;
+      border-radius: 4px;
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #auth-form button[type="submit"]:hover {
+      background: rgba(245,166,35,0.12);
+    }
+
+    #auth-error {
+      color: #ff6b6b; font-size: 13px; text-align: center; min-height: 18px;
+    }
+
+    #auth-back {
+      color: rgba(245,166,35,0.5); font-size: 13px; text-align: center;
+      cursor: pointer; margin-top: 4px;
+    }
+
+    #auth-back:hover { color: #f5a623; }
+
   </style>
 </head>
 <body>
-  <div id="app"></div>
-  <script type="module" src="/src/main.js"></script>
+  <div id="landing"></div>
+
+  <div id="overlay">
+    <div id="tagline">Your life has a shape.</div>
+    <div id="buttons">
+      <button id="btn-register">Register</button>
+      <button id="btn-login">Log In</button>
+    </div>
+  </div>
+
+  <div id="auth-form-container">
+    <form id="auth-form">
+      <h2 id="auth-title">LOG IN</h2>
+      <input type="email" id="auth-email" placeholder="Email" required>
+      <input type="password" id="auth-password" placeholder="Password" required>
+      <input type="date" id="auth-birthday" placeholder="Birthday">
+      <button type="submit" id="auth-submit">LOG IN</button>
+      <div id="auth-error"></div>
+      <div id="auth-back">Back</div>
+    </form>
+  </div>
+
+  <script type="module" src="/src/landing.js"></script>
 </body>
 </html>
