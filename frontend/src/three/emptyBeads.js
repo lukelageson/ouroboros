@@ -165,36 +165,21 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
   // Zoom gate: only show when camera is close to the spiral
   const camDist = cam.position.length(); // distance from world origin
   const spiralAxisDist = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2);
-  // Use distance from camera to the nearest point on the Y-axis (spiral center)
   if (spiralAxisDist > ZOOM_GATE && camDist > ZOOM_GATE) {
     hideAllEmptyBeads();
     return;
   }
 
-  // Build ray from mouse
-  _mouse.x =  (mouseEvent.clientX / window.innerWidth)  * 2 - 1;
-  _mouse.y = -(mouseEvent.clientY / window.innerHeight) * 2 + 1;
-  _ray.setFromCamera(_mouse, cam);
-
-  const ro = _ray.ray.origin;
-  const rd = _ray.ray.direction;
-
-  for (let i = 0; i < count; i++) {
-    const p = instancePositions[i];
-
-    // Distance from point to ray
-    _v.subVectors(p, ro);
-    const t = _v.dot(rd);
-    _proj.copy(rd).multiplyScalar(t).add(ro);
-    const dist = p.distanceTo(_proj);
-
-    // Smooth falloff: 1 at dist=0, 0 at dist=REVEAL_DIST
-    arr[i] = Math.max(0, 1 - dist / REVEAL_DIST);
-  }
-
-  // Hovered instance always at full opacity
+  // Perspective: zero all, then highlight exact hovered bead + ±3 index neighbors
+  for (let i = 0; i < count; i++) arr[i] = 0;
   if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count) {
     arr[_hoveredInstanceId] = 1.0;
+    for (let delta = 1; delta <= 3; delta++) {
+      const lo = _hoveredInstanceId - delta;
+      const hi = _hoveredInstanceId + delta;
+      if (lo >= 0)     arr[lo] = 0.5;
+      if (hi < count)  arr[hi] = 0.5;
+    }
   }
 
   opacityAttr.needsUpdate = true;
