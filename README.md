@@ -17,3 +17,10 @@ A journaling app where time is rendered as a 3D spiral and entries are colored b
 5. `cd frontend && npm run dev`
 
 Backend runs on port 3001, frontend dev server on port 5173.
+
+## Demo Account
+
+Seed the demo account: `cd backend && node src/db/seedDemo.js`
+
+- **Email:** demo@ouroboros.app
+- **Password:** demo1234
