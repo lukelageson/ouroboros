@@ -179,7 +179,7 @@ function rebuildSpiral(birthYear) {
       }
 
       const curve = new THREE.CatmullRomCurve3(subPoints);
-      const tubeGeo = new THREE.TubeGeometry(curve, subPoints.length, 0.15, 8, false);
+      const tubeGeo = new THREE.TubeGeometry(curve, subPoints.length, 0.11, 8, false);
       spiralMesh = new THREE.Mesh(tubeGeo, tubeMat);
       scene.add(spiralMesh);
 

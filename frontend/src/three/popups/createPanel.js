@@ -1,25 +1,35 @@
 /**
  * createPanel.js — Type B popup: create-entry panel for an empty bead.
  *
- * Shows a text area, color picker (14 circles), mood selector (1-5),
- * milestone toggle, and Place Bead / Cancel buttons.
- * The panel's DOM has pointer-events: auto so users can interact.
+ * Fixed-position DOM element, positioned near the bead's screen projection
+ * and clamped within the viewport so it always reads horizontally.
  */
 
-import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
-import { css3dScene, registerPanel, unregisterPanel } from '../renderer.js';
+import { getActiveCamera } from '../renderer.js';
 
 let activePanel = null;
 
 const PALETTE = [
-  '#e74c3c','#e67e22','#f1c40f','#2ecc71','#1abc9c','#3498db','#9b59b6',
-  '#e91e8c','#ff6b35','#c0392b','#27ae60','#2980b9','#8e44ad','#f39c12',
+  '#e74c3c','#e67e22','#f1c40f','#2ecc71',
+  '#3498db','#9b59b6','#e91e8c','#ffffff',
 ];
+
+const POPUP_W      = 300;
+const POPUP_OFFSET = 24;
+
+function _projectToScreen(worldPos) {
+  const cam = getActiveCamera();
+  const v = worldPos.clone().project(cam);
+  return {
+    x: Math.round((v.x + 1) * 0.5 * window.innerWidth),
+    y: Math.round((-v.y + 1) * 0.5 * window.innerHeight),
+  };
+}
 
 /**
  * Open the create-entry panel for an empty date.
- * @param {string} dateISO          ISO date string (YYYY-MM-DD)
- * @param {THREE.Vector3} pos       world position of the empty bead
+ * @param {string}           dateISO   ISO date string (YYYY-MM-DD)
+ * @param {THREE.Vector3}    pos       world position of the empty bead
  * @param {function(object)} onSubmit  callback with entry data
  */
 export function openCreatePanel(dateISO, pos, onSubmit) {
@@ -33,16 +43,19 @@ export function openCreatePanel(dateISO, pos, onSubmit) {
   // ── Root div ───────────────────────────────────────────────────────────
   const div = document.createElement('div');
   Object.assign(div.style, {
+    position:      'fixed',
+    width:         `${POPUP_W}px`,
     background:    'rgba(20, 12, 4, 0.95)',
     border:        '1px solid rgba(245, 166, 35, 0.4)',
     color:         '#fff5e6',
     padding:       '18px 20px',
     borderRadius:  '10px',
-    width:         '280px',
     fontFamily:    'monospace',
     fontSize:      '12px',
     lineHeight:    '1.4',
     pointerEvents: 'auto',
+    zIndex:        '150',
+    boxSizing:     'border-box',
   });
 
   // Prevent clicks inside the panel from propagating to the canvas
@@ -94,22 +107,25 @@ export function openCreatePanel(dateISO, pos, onSubmit) {
 
   const colorRow = document.createElement('div');
   Object.assign(colorRow.style, {
-    display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px',
+    display:             'grid',
+    gridTemplateColumns: 'repeat(8, 28px)',
+    gap:                 '6px',
+    marginBottom:        '12px',
   });
 
   const colorDots = [];
   for (const hex of PALETTE) {
     const dot = document.createElement('div');
     Object.assign(dot.style, {
-      width: '18px', height: '18px', borderRadius: '50%',
+      width: '28px', height: '28px', borderRadius: '50%',
       background: hex, cursor: 'pointer',
       border: hex === selectedColor ? '2px solid #fff5e6' : '2px solid transparent',
       boxSizing: 'border-box',
     });
     dot.addEventListener('click', () => {
       selectedColor = hex;
-      colorDots.forEach((d, i) => {
-        d.style.border = PALETTE[i] === hex
+      colorDots.forEach((cd, i) => {
+        cd.style.border = PALETTE[i] === hex
           ? '2px solid #fff5e6' : '2px solid transparent';
       });
     });
@@ -132,12 +148,12 @@ export function openCreatePanel(dateISO, pos, onSubmit) {
     display: 'flex', gap: '8px', marginBottom: '12px',
   });
 
-  const MOOD_HEX = ['#c0392b','#e67e22','#6b5a47','#7dbb6e','#27ae60'];
+  const MOOD_HEX = ['#c0392b','#e67e22','#f1c40f','#7dbb6e','#27ae60'];
   const moodDots = [];
   for (let m = 1; m <= 5; m++) {
     const dot = document.createElement('div');
     Object.assign(dot.style, {
-      width: '22px', height: '22px', borderRadius: '50%',
+      width: '26px', height: '26px', borderRadius: '50%',
       background: MOOD_HEX[m - 1], cursor: 'pointer',
       border: '2px solid transparent', boxSizing: 'border-box',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -147,11 +163,11 @@ export function openCreatePanel(dateISO, pos, onSubmit) {
     dot.addEventListener('click', () => {
       if (selectedMood === m) {
         selectedMood = null;
-        moodDots.forEach(d => d.style.border = '2px solid transparent');
+        moodDots.forEach(md => md.style.border = '2px solid transparent');
       } else {
         selectedMood = m;
-        moodDots.forEach((d, i) => {
-          d.style.border = (i + 1) === m
+        moodDots.forEach((md, i) => {
+          md.style.border = (i + 1) === m
             ? '2px solid #fff5e6' : '2px solid transparent';
         });
       }
@@ -229,22 +245,38 @@ export function openCreatePanel(dateISO, pos, onSubmit) {
   btnRow.appendChild(cancelBtn);
   div.appendChild(btnRow);
 
-  // ── CSS3DObject ────────────────────────────────────────────────────────
-  const panel = new CSS3DObject(div);
-  panel.scale.setScalar(0.05);
-  panel.position.copy(pos);
-  panel.position.y += 3;
+  // ── Append + position ──────────────────────────────────────────────────
+  document.getElementById('app').appendChild(div);
 
-  css3dScene.add(panel);
-  registerPanel(panel, pos);
-  activePanel = panel;
+  requestAnimationFrame(() => {
+    const screen = _projectToScreen(pos);
+    const popupH = div.offsetHeight || 300;
+    const margin = 12;
+
+    // Try right of bead first, then left
+    let left = screen.x + POPUP_OFFSET;
+    if (left + POPUP_W > window.innerWidth - margin) {
+      left = screen.x - POPUP_W - POPUP_OFFSET;
+    }
+    left = Math.max(margin, Math.min(left, window.innerWidth - POPUP_W - margin));
+
+    // Vertically centered on the bead, clamped to viewport
+    let top = screen.y - popupH / 2;
+    top = Math.max(margin, Math.min(top, window.innerHeight - popupH - margin));
+
+    div.style.left = `${left}px`;
+    div.style.top  = `${top}px`;
+
+    textarea.focus();
+  });
+
+  activePanel = div;
 }
 
 /** Close the active create panel. */
 export function closeCreatePanel() {
   if (activePanel) {
-    unregisterPanel(activePanel);
-    css3dScene.remove(activePanel);
+    activePanel.remove();
     activePanel = null;
   }
 }
