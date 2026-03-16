@@ -5,154 +5,138 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { dateToAngle } from './spiralMath.js';
 
-const DAYS_IN_YEAR = 365.25;
-const MS_PER_DAY = 86400000;
-const RIBBON_RADIUS = 42; // spiral radius (40) + 2
-const RIBBON_WIDTH = 4.5;
+const DAYS_IN_YEAR  = 365.25;
+const MS_PER_DAY    = 86400000;
+const RIBBON_RADIUS = 42;
+const RIBBON_WIDTH  = 4.5;
 
-// Visibility thresholds
-const HEIGHT_RADIUS = 80;    // world-unit half-height of visible ribbon window around camera Y
-const ZOOM_THRESHOLD = 120;  // max camera horizontal distance from origin before ribbon hides
+// Angular culling threshold for perspective mode labels/dividers
+const ZOOM_THRESHOLD = 120;
 
 const MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
+function _resolution() {
+  return new THREE.Vector2(
+    window.innerWidth  * window.devicePixelRatio,
+    window.innerHeight * window.devicePixelRatio
+  );
+}
+
 function ribbonPosition(date, birthday) {
   const d = new Date(date);
   const b = new Date(birthday);
   const yearsElapsed = (d - b) / (DAYS_IN_YEAR * MS_PER_DAY);
   const angle = dateToAngle(date);
-  const x = RIBBON_RADIUS * Math.cos(angle);
-  const z = RIBBON_RADIUS * Math.sin(angle);
-  const y = yearsElapsed * 8;
-  return new THREE.Vector3(x, y, z);
+  return new THREE.Vector3(
+    RIBBON_RADIUS * Math.cos(angle),
+    yearsElapsed * 8,
+    RIBBON_RADIUS * Math.sin(angle)
+  );
 }
 
 /**
- * Builds the ribbon mesh, individual divider line objects, and CSS3D labels.
+ * Build the ribbon as monthly arc Line2 segments, plus dividers and CSS3D labels.
+ *
+ * Returns { group, arcSegments, dividerObjects, labels }
+ *   group        — THREE.Group containing all inner/outer arc lines
+ *   arcSegments  — Array<{ innerLine, outerLine, startDate, endDate, year, month }>
+ *   dividerObjects — Array of Line2 per month boundary
+ *   labels       — Array of CSS3DObject (month abbreviations + year numbers)
  */
 export function buildRibbon(birthday, today) {
   const b = new Date(birthday);
   const t = new Date(today);
-  const totalMs = t - b;
-  const numSegments = 2000;
 
-  // --- Ribbon geometry ---
-  const innerVerts = [];
-  const outerVerts = [];
+  const group       = new THREE.Group();
+  const arcSegments = [];
 
-  for (let i = 0; i <= numSegments; i++) {
-    const fraction = i / numSegments;
-    const date = new Date(b.getTime() + fraction * totalMs);
-    const angle = dateToAngle(date);
-    const yearsElapsed = (date - b) / (DAYS_IN_YEAR * MS_PER_DAY);
-    const y = yearsElapsed * 8;
+  const res    = _resolution();
+  const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
+  const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
 
-    const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
-    innerVerts.push(rInner * Math.cos(angle), y, rInner * Math.sin(angle));
-
-    const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
-    outerVerts.push(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle));
-  }
-
-  const positions = [];
-  const indices = [];
-
-  for (let i = 0; i <= numSegments; i++) {
-    const ix = i * 3;
-    positions.push(innerVerts[ix], innerVerts[ix + 1], innerVerts[ix + 2]);
-    positions.push(outerVerts[ix], outerVerts[ix + 1], outerVerts[ix + 2]);
-  }
-
-  for (let i = 0; i < numSegments; i++) {
-    const a = i * 2;
-    const bIdx = a + 1;
-    const c = a + 2;
-    const d = a + 3;
-    indices.push(a, bIdx, c);
-    indices.push(bIdx, d, c);
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  geometry.computeVertexNormals();
-
-  // ShaderMaterial: fades ribbon by height-proximity and zoom-distance.
-  const ribbonMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      baseColor:      { value: new THREE.Color(0xfff5e6) },
-      baseOpacity:    { value: 0.12 },
-      cameraY:        { value: 0 },
-      cameraHDist:    { value: 0 },
-      heightRadius:   { value: HEIGHT_RADIUS },
-      zoomThreshold:  { value: ZOOM_THRESHOLD },
-    },
-    vertexShader: `
-      varying vec3 vWorldPos;
-      #include <clipping_planes_pars_vertex>
-      void main() {
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        vec4 worldPos   = modelMatrix    * vec4(position, 1.0);
-        vWorldPos = worldPos.xyz;
-        gl_Position = projectionMatrix * mvPosition;
-        #include <clipping_planes_vertex>
-      }
-    `,
-    fragmentShader: `
-      #include <clipping_planes_pars_fragment>
-      uniform vec3  baseColor;
-      uniform float baseOpacity;
-      uniform float cameraY;
-      uniform float cameraHDist;
-      uniform float heightRadius;
-      uniform float zoomThreshold;
-      varying vec3  vWorldPos;
-      void main() {
-        #include <clipping_planes_fragment>
-        float yDist  = abs(vWorldPos.y - cameraY);
-        float yAlpha = 1.0 - smoothstep(heightRadius * 0.6, heightRadius, yDist);
-        float zAlpha = 1.0 - smoothstep(zoomThreshold * 0.7, zoomThreshold, cameraHDist);
-        float alpha  = baseOpacity * yAlpha * zAlpha;
-        if (alpha < 0.002) discard;
-        gl_FragColor = vec4(baseColor, alpha);
-      }
-    `,
+  // Shared arc material (cloned per segment so opacity can vary if needed)
+  const arcMatBase = new LineMaterial({
+    color:       0xfff5e6,
+    linewidth:   1,
     transparent: true,
-    depthWrite: false,
-    side: THREE.DoubleSide,
+    opacity:     0.12,
+    resolution:  res,
   });
 
-  const ribbonMesh = new THREE.Mesh(geometry, ribbonMaterial);
+  // Monthly arc segments — start from birthday's month
+  let cursor = new Date(b.getFullYear(), b.getMonth(), 1);
+  while (cursor <= t) {
+    const year      = cursor.getFullYear();
+    const month     = cursor.getMonth();
+    const nextMonth = new Date(year, month + 1, 1);
 
-  // --- Individual divider line objects and labels ---
-  const labels = [];
+    const monthStart = new Date(Math.max(cursor.getTime(), b.getTime()));
+    const monthEnd   = new Date(Math.min(nextMonth.getTime(), t.getTime()));
+
+    if (monthStart < monthEnd) {
+      const spanMs = monthEnd - monthStart;
+      const N = 20;
+      const innerPositions = [];
+      const outerPositions = [];
+
+      for (let i = 0; i <= N; i++) {
+        const frac  = i / N;
+        const date  = new Date(monthStart.getTime() + frac * spanMs);
+        const angle = dateToAngle(date);
+        const ye    = (date - b) / (DAYS_IN_YEAR * MS_PER_DAY);
+        const y     = ye * 8;
+        innerPositions.push(rInner * Math.cos(angle), y, rInner * Math.sin(angle));
+        outerPositions.push(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle));
+      }
+
+      const innerGeo = new LineGeometry(); innerGeo.setPositions(innerPositions);
+      const outerGeo = new LineGeometry(); outerGeo.setPositions(outerPositions);
+
+      const innerLine = new Line2(innerGeo, arcMatBase.clone());
+      const outerLine = new Line2(outerGeo, arcMatBase.clone());
+      innerLine.computeLineDistances();
+      outerLine.computeLineDistances();
+
+      group.add(innerLine);
+      group.add(outerLine);
+
+      arcSegments.push({
+        innerLine, outerLine,
+        startDate: new Date(monthStart),
+        endDate:   new Date(monthEnd),
+        year, month,
+      });
+    }
+
+    cursor = nextMonth;
+  }
+
+  // ── Dividers and labels ──────────────────────────────────────────────────
+
+  const labels         = [];
   const dividerObjects = [];
 
-  // Shared Line2 material — 3× thickness (LineBasicMaterial linewidth is ignored on WebGL)
   const dividerMaterial = new LineMaterial({
-    color: 0xfff5e6,
+    color:       0xfff5e6,
     transparent: true,
-    opacity: 0.15,
-    linewidth: 3, // pixels
-    resolution: new THREE.Vector2(window.innerWidth * window.devicePixelRatio, window.innerHeight * window.devicePixelRatio),
+    opacity:     0.15,
+    linewidth:   3,
+    resolution:  res,
   });
 
-  let cursor = new Date(b.getFullYear(), b.getMonth() + 1, 1);
+  let divCursor = new Date(b.getFullYear(), b.getMonth() + 1, 1);
+  while (divCursor <= t) {
+    const month         = divCursor.getMonth();
+    const year          = divCursor.getFullYear();
+    const isYearBound   = month === 0;
+    const angle         = dateToAngle(divCursor);
+    const yearsElapsed  = (divCursor - b) / (DAYS_IN_YEAR * MS_PER_DAY);
+    const y             = yearsElapsed * 8;
 
-  while (cursor <= t) {
-    const month = cursor.getMonth();
-    const year = cursor.getFullYear();
-    const isYearBoundary = month === 0;
-    const angle = dateToAngle(cursor);
-    const yearsElapsed = (cursor - b) / (DAYS_IN_YEAR * MS_PER_DAY);
-    const y = yearsElapsed * 8;
-
-    // One Line2 per divider — enables per-segment angular + height culling
-    const rInner = RIBBON_RADIUS - RIBBON_WIDTH / 2;
-    const rOuter = RIBBON_RADIUS + RIBBON_WIDTH / 2;
+    // Line2 divider (radial line across ribbon width)
     const segGeo = new LineGeometry();
     segGeo.setPositions([
       rInner * Math.cos(angle), y, rInner * Math.sin(angle),
@@ -161,29 +145,29 @@ export function buildRibbon(birthday, today) {
     const seg = new Line2(segGeo, dividerMaterial);
     seg.computeLineDistances();
     seg.userData.angle = angle;
-    seg.userData.y = y;
+    seg.userData.y     = y;
+    seg.userData.date  = new Date(divCursor);
     dividerObjects.push(seg);
 
-    // Label — placed at midpoint of month segment (half-month after boundary)
-    const nextCursor = new Date(year, month + 1, 1);
-    const midDate    = new Date((cursor.getTime() + nextCursor.getTime()) / 2);
-    const midAngle   = dateToAngle(midDate);
-    const pos        = ribbonPosition(midDate, birthday);
+    // Label placed at midpoint of the following month
+    const nextDivCursor = new Date(year, month + 1, 1);
+    const midDate  = new Date((divCursor.getTime() + nextDivCursor.getTime()) / 2);
+    const midAngle = dateToAngle(midDate);
+    const pos      = ribbonPosition(midDate, birthday);
 
-    // Shared orientation matrix (reads from outside the spiral)
-    const tangent = new THREE.Vector3(Math.sin(midAngle), 0, -Math.cos(midAngle));
+    const tangent = new THREE.Vector3( Math.sin(midAngle), 0, -Math.cos(midAngle));
     const outward = new THREE.Vector3(-Math.cos(midAngle), 0, -Math.sin(midAngle));
     const yUp     = new THREE.Vector3(0, 1, 0);
     const rotMat  = new THREE.Matrix4().makeBasis(tangent, outward, yUp);
 
     function makeLabel(text, fontSize, color, isYearBnd) {
       const div = document.createElement('div');
-      div.textContent = text;
-      div.style.fontFamily   = 'sans-serif';
+      div.textContent       = text;
+      div.style.fontFamily  = 'sans-serif';
       div.style.pointerEvents = 'none';
-      div.style.whiteSpace   = 'nowrap';
-      div.style.fontSize     = fontSize;
-      div.style.color        = color;
+      div.style.whiteSpace  = 'nowrap';
+      div.style.fontSize    = fontSize;
+      div.style.color       = color;
 
       const lbl = new CSS3DObject(div);
       lbl.position.copy(pos);
@@ -191,83 +175,87 @@ export function buildRibbon(birthday, today) {
       lbl.quaternion.setFromRotationMatrix(rotMat);
       lbl.userData.angle          = midAngle;
       lbl.userData.y              = pos.y;
-      lbl.userData.month          = month; // 0–11, used for plan-view deduplication
+      lbl.userData.month          = month;
       lbl.userData.isYearBoundary = isYearBnd;
+      lbl.userData.date           = new Date(divCursor);
       return lbl;
     }
 
-    // Always create a month-abbreviation label (never hidden by isYearBoundary filter)
     labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,245,230,0.12)', false));
-
-    // For January boundaries also create a year-number label (hidden in plan view)
-    if (isYearBoundary) {
+    if (isYearBound) {
       labels.push(makeLabel(String(year), '13px', 'rgba(255,245,230,0.9)', true));
     }
 
-    cursor = nextCursor;
+    divCursor = nextDivCursor;
   }
 
-  return { ribbonMesh, dividerObjects, labels };
+  return { group, arcSegments, dividerObjects, labels };
 }
 
 /**
- * Per-frame update: culls labels and divider segments by angular position,
- * height proximity to camera, and zoom distance. Updates ribbon shader uniforms.
+ * Per-frame update: show/hide arc segments, dividers, and labels based on
+ * date range. Labels facing the camera are preserved (angular culling).
  *
- * planMode    — true while in (or transitioning to) plan view.
- *               Removes angular + height culling; shows only the current year's coil.
- * spiralTopY  — Y coordinate of the topmost coil; used to anchor plan-view visibility.
+ * @param {object}   ribbon        { group, arcSegments, dividerObjects, labels }
+ * @param {THREE.Camera} camera    active camera
+ * @param {boolean}  ribbonVisible R-key toggle
+ * @param {boolean}  planMode      true while in/transitioning to plan view
+ * @param {Date}     ceilingDate   upper date bound
+ * @param {boolean}  detailMode    true while in/transitioning to detail view
+ * @param {Date|null} floorDate    lower bound (detail view only)
  */
-/**
- * @param {number} clipY      current section-cut Y (defaults to spiralTopY = no cut)
- * @param {boolean} detailMode  true while in (or transitioning to) detail view
- */
-export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, ribbonVisible, planMode, spiralTopY, clipY = spiralTopY, detailMode = false) {
-  const u = ribbonMesh.material.uniforms;
+export function updateRibbonLabels(
+  labels, dividerObjects, ribbonOrMesh,
+  camera, ribbonVisible,
+  planMode, spiralTopY, clipY, detailMode = false,
+  arcSegments = null, ceilingDate = null, floorDate = null
+) {
+  // Support both old API (ribbonMesh with uniforms) and new API (arcSegments).
+  // In Change 2 ribbonOrMesh is the THREE.Group — we skip uniform updates.
+  const hasUniforms = ribbonOrMesh?.material?.uniforms;
 
-  if (detailMode) {
-    // Detail view: tight 1-year ribbon window around the camera target point
-    const targetY  = camera.position.y - 15;
-    const camAngle = Math.atan2(camera.position.z, camera.position.x);
-
-    u.cameraY.value      = targetY;
-    u.cameraHDist.value  = 0;
-    u.heightRadius.value = 6;
-
-    for (const label of labels) {
-      if (!ribbonVisible || Math.abs(label.userData.y - targetY) > 8) {
-        label.visible = false; continue;
-      }
-      let diff = label.userData.angle - camAngle;
-      if (diff >  Math.PI) diff -= 2 * Math.PI;
-      if (diff < -Math.PI) diff += 2 * Math.PI;
-      label.visible = Math.abs(diff) < Math.PI / 2;
+  if (hasUniforms) {
+    // Legacy path (should not be reached after Change 2 wires new API)
+    const u = ribbonOrMesh.material.uniforms;
+    if (planMode || detailMode) {
+      u.cameraY.value      = clipY - 4;
+      u.cameraHDist.value  = 0;
+      u.heightRadius.value = 6;
+      u.sectionCutY.value  = clipY;
+      u.lowerCutY.value    = -9999;
+    } else {
+      const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
+      u.cameraY.value      = camera.position.y;
+      u.cameraHDist.value  = camHDist;
+      u.heightRadius.value = 80;
+      u.sectionCutY.value  = clipY;
+      u.lowerCutY.value    = -9999;
     }
-    for (const seg of dividerObjects) {
-      if (!ribbonVisible || Math.abs(seg.userData.y - targetY) > 8) {
-        seg.visible = false; continue;
-      }
-      let diff = seg.userData.angle - camAngle;
-      if (diff >  Math.PI) diff -= 2 * Math.PI;
-      if (diff < -Math.PI) diff += 2 * Math.PI;
-      seg.visible = Math.abs(diff) < Math.PI / 2;
-    }
-    return;
   }
 
-  if (planMode) {
-    // Tight ribbon shader window centred just below the section cut.
-    // heightRadius=6 → fully visible within ~1 year band below clipY.
-    u.cameraY.value      = clipY - 4;
-    u.cameraHDist.value  = 0;
-    u.heightRadius.value = 6;
+  // ── Arc segment visibility (new path) ──────────────────────────────────
+  if (arcSegments && ceilingDate) {
+    const ceil  = ceilingDate;
+    const floor = floorDate || null;
+    for (const seg of arcSegments) {
+      let vis = seg.endDate <= ceil;
+      if (floor) vis = vis && seg.startDate >= floor;
+      seg.innerLine.visible = ribbonVisible && vis;
+      seg.outerLine.visible = ribbonVisible && vis;
+    }
+  }
 
-    // Deduplicate month labels: keep the most recent label for each month (0–11)
-    // that is at or below clipY.  Year-boundary labels always hidden in plan view.
+  // ── Label and divider visibility ───────────────────────────────────────
+  if (planMode || detailMode) {
+    const ceil      = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : null;
+    const floor     = floorDate   ? floorDate.toISOString().slice(0, 10)   : null;
+
+    // Deduplicate month labels: keep the most recent per-month label at/below ceiling
     const latestByMonth = new Map();
     for (const label of labels) {
       if (label.userData.isYearBoundary) continue;
-      if (label.userData.y > clipY + 0.5) continue; // above cut, skip
+      if (ceil && label.userData.date?.toISOString().slice(0, 10) > ceil) continue;
+      if (floor && label.userData.date?.toISOString().slice(0, 10) < floor) continue;
       const m = label.userData.month;
       if (!latestByMonth.has(m) || label.userData.y > latestByMonth.get(m).userData.y) {
         latestByMonth.set(m, label);
@@ -278,41 +266,64 @@ export function updateRibbonLabels(labels, dividerObjects, ribbonMesh, camera, r
     for (const label of labels) {
       label.visible = ribbonVisible && latestSet.has(label);
     }
+
     for (const seg of dividerObjects) {
-      seg.visible = ribbonVisible && seg.userData.y >= clipY - 8 && seg.userData.y <= clipY + 0.5;
+      const segDateISO = seg.userData.date?.toISOString().slice(0, 10);
+      let vis = true;
+      if (ceil  && segDateISO > ceil)  vis = false;
+      if (floor && segDateISO < floor) vis = false;
+      // Fallback to Y-based check when no date available
+      if (!seg.userData.date) {
+        vis = seg.userData.y >= clipY - 8 && seg.userData.y <= clipY + 0.5;
+      }
+      seg.visible = ribbonVisible && vis;
     }
 
   } else {
-    // Perspective mode: full proximity + angular culling
+    // Perspective mode: angular culling + section cut
     const camAngle = Math.atan2(camera.position.z, camera.position.x);
     const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
     const camY     = camera.position.y;
     const zoomed   = camHDist < ZOOM_THRESHOLD;
-
-    u.cameraY.value      = camY;
-    u.cameraHDist.value  = camHDist;
-    u.heightRadius.value = HEIGHT_RADIUS;
+    const ceil     = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : null;
 
     for (const label of labels) {
-      if (!ribbonVisible || !zoomed || Math.abs(label.userData.y - camY) > HEIGHT_RADIUS) {
-        label.visible = false;
-        continue;
-      }
+      if (!ribbonVisible || !zoomed) { label.visible = false; continue; }
+      const lDate = label.userData.date?.toISOString().slice(0, 10);
+      if (ceil && lDate && lDate > ceil) { label.visible = false; continue; }
+      if (Math.abs(label.userData.y - camY) > 80) { label.visible = false; continue; }
       let diff = label.userData.angle - camAngle;
-      if (diff > Math.PI)  diff -= 2 * Math.PI;
+      if (diff >  Math.PI) diff -= 2 * Math.PI;
       if (diff < -Math.PI) diff += 2 * Math.PI;
       label.visible = Math.abs(diff) < Math.PI / 2;
     }
 
     for (const seg of dividerObjects) {
-      if (!ribbonVisible || !zoomed || Math.abs(seg.userData.y - camY) > HEIGHT_RADIUS) {
-        seg.visible = false;
-        continue;
-      }
+      if (!ribbonVisible || !zoomed) { seg.visible = false; continue; }
+      const sDate = seg.userData.date?.toISOString().slice(0, 10);
+      if (ceil && sDate && sDate > ceil) { seg.visible = false; continue; }
+      if (Math.abs(seg.userData.y - camY) > 80) { seg.visible = false; continue; }
       let diff = seg.userData.angle - camAngle;
-      if (diff > Math.PI)  diff -= 2 * Math.PI;
+      if (diff >  Math.PI) diff -= 2 * Math.PI;
       if (diff < -Math.PI) diff += 2 * Math.PI;
       seg.visible = Math.abs(diff) < Math.PI / 2;
     }
+  }
+}
+
+/**
+ * Update LineMaterial resolution on window resize for all ribbon lines.
+ */
+export function updateRibbonResolution(arcSegments, dividerObjects) {
+  const res = new THREE.Vector2(
+    window.innerWidth  * window.devicePixelRatio,
+    window.innerHeight * window.devicePixelRatio
+  );
+  for (const seg of arcSegments) {
+    seg.innerLine.material.resolution.copy(res);
+    seg.outerLine.material.resolution.copy(res);
+  }
+  for (const div of dividerObjects) {
+    div.material.resolution.copy(res);
   }
 }

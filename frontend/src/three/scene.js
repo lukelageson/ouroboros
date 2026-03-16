@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { webgl, scene, css3dScene } from './renderer.js';
-import { buildSpiral } from './spiralGeometry.js';
+import { buildSpiralSegments } from './spiralGeometry.js';
 import { buildGroundPlane } from './groundPlane.js';
 import { buildRibbon } from './ribbon.js';
 
@@ -42,14 +42,19 @@ export function initScene() {
   const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
   const spiralTopY = ((today - birthday) / (DAYS_IN_YEAR * MS_PER_DAY)) * 8;
 
-  const spiral = buildSpiral(birthday, today, spiralTopY);
-  scene.add(spiral);
+  // Segmented spiral (weekly Line2 segments)
+  const { group: spiralGroup, segments: spiralSegments } = buildSpiralSegments(birthday, today);
+  scene.add(spiralGroup);
 
-  // Ribbon overlay with month/year labels
-  const { ribbonMesh, dividerObjects, labels } = buildRibbon(birthday, today);
-  scene.add(ribbonMesh);
+  // Segmented ribbon (monthly arc Line2 segments) + dividers + labels
+  const { group: ribbonGroup, arcSegments, dividerObjects, labels } = buildRibbon(birthday, today);
+  scene.add(ribbonGroup);
   for (const seg of dividerObjects) scene.add(seg);
   for (const label of labels) css3dScene.add(label);
 
-  return { ribbonMesh, dividerObjects, labels, spiralTopY, spiral, birthday, today, ground };
+  return {
+    ribbonGroup, arcSegments, dividerObjects, labels,
+    spiralGroup, spiralSegments,
+    spiralTopY, birthday, today, ground,
+  };
 }

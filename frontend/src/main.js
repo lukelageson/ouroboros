@@ -4,7 +4,12 @@ import {
   webgl, camera, controls, scene, getActiveCamera,
 } from './three/renderer.js';
 import { initScene }                           from './three/scene.js';
-import { updateRibbonLabels }                  from './three/ribbon.js';
+import {
+  updateRibbonLabels, updateRibbonResolution,
+} from './three/ribbon.js';
+import {
+  updateSpiralVisibility, updateSpiralResolution,
+} from './three/spiralGeometry.js';
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
@@ -60,12 +65,18 @@ import {
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
 const {
-  ribbonMesh, dividerObjects, labels,
-  spiralTopY, spiral,
-  birthday, today, ground,
+  ribbonGroup, arcSegments, dividerObjects, labels,
+  spiralGroup, spiralSegments,
+  spiralTopY, birthday, today, ground,
 } = initScene();
 
 let ribbonVisible = true;
+
+// Update LineMaterial resolution on resize so line widths stay correct in pixels
+window.addEventListener('resize', () => {
+  updateSpiralResolution(spiralSegments);
+  updateRibbonResolution(arcSegments, dividerObjects);
+});
 
 // Compute today's position on the spiral for the initial detail-view pan
 const todayPos = dateToPosition(today, birthday);
@@ -126,10 +137,19 @@ registerFrameCallback(() => {
 });
 
 registerFrameCallback((cam) => {
+  const mode        = getCurrentMode();
+  const ceilingDate = getSectionCutDate();
+  const floorDate   = (mode === 'detail') ? getFloorDate() : null;
+
+  // Spiral segment visibility (date-based + plan-mode opacity fade)
+  updateSpiralVisibility(spiralSegments, ceilingDate, floorDate, isPlanMode());
+
+  // Ribbon: arc segments + labels + dividers
   updateRibbonLabels(
-    labels, dividerObjects, ribbonMesh,
+    labels, dividerObjects, ribbonGroup,
     cam, ribbonVisible,
-    isPlanMode(), spiralTopY, getSectionCutY(), isDetailMode()
+    isPlanMode(), spiralTopY, getSectionCutY(), isDetailMode(),
+    arcSegments, ceilingDate, floorDate
   );
 });
 
@@ -264,13 +284,9 @@ canvas.addEventListener('click', (e) => {
     return;
   }
 
-  // ── 4. Surface-click navigation (legacy) ─────────────────────────────
-  const spiralHits = clickRaycaster.intersectObject(spiral, false);
-
+  // ── 4. View mode navigation ───────────────────────────────────────────
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
-  if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > effectiveTop - 16) {
-    setViewMode('plan', effectiveTop);
-  } else if (mode === 'plan') {
+  if (mode === 'plan') {
     const cx = window.innerWidth  / 2;
     const cy = window.innerHeight / 2;
     if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
@@ -667,7 +683,7 @@ function _deriveAnalysisRole(analysis, entry) {
 window.addEventListener('keydown', (e) => {
   if (e.key === 'r' || e.key === 'R') {
     ribbonVisible = !ribbonVisible;
-    ribbonMesh.visible = ribbonVisible;
+    ribbonGroup.visible = ribbonVisible;
   }
 });
 

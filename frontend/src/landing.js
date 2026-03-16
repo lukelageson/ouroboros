@@ -5,6 +5,9 @@
  */
 
 import * as THREE from 'three';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { dateToPosition, dateToAngle } from './three/spiralMath.js';
 import * as api from './api.js';
 
@@ -44,26 +47,46 @@ const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getD
 const totalMs = today - birthday;
 const spiralTopY = (totalMs / (DAYS_IN_YEAR * MS_PER_DAY)) * 8;
 
-// Build tube geometry
-const numPoints = 2000;
-const points = [];
-for (let i = 0; i <= numPoints; i++) {
-  const fraction = i / numPoints;
-  const date = new Date(birthday.getTime() + fraction * totalMs);
-  points.push(dateToPosition(date, birthday));
-}
+// Build weekly Line2 segments (same approach as main app)
+const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
+const dpr = window.devicePixelRatio;
+const spiralResolution = new THREE.Vector2(
+  window.innerWidth * dpr,
+  window.innerHeight * dpr
+);
 
-const curve = new THREE.CatmullRomCurve3(points);
-const tubeGeo = new THREE.TubeGeometry(curve, numPoints, 0.15, 8, false);
-const tubeMat = new THREE.MeshStandardMaterial({
-  color: 0xfff5e6,
-  emissive: 0xffecd4,
-  emissiveIntensity: 0.35,
-  metalness: 0.3,
-  roughness: 0.55,
-});
-const spiralMesh = new THREE.Mesh(tubeGeo, tubeMat);
-scene.add(spiralMesh);
+let segStart = new Date(birthday);
+while (segStart < today) {
+  const segEndMs = Math.min(segStart.getTime() + MS_PER_WEEK, today.getTime());
+  const segEnd   = new Date(segEndMs);
+  const spanMs   = segEnd - segStart;
+
+  const positions = [];
+  const N = 10;
+  for (let i = 0; i <= N; i++) {
+    const frac = i / N;
+    const date = new Date(segStart.getTime() + frac * spanMs);
+    const pos  = dateToPosition(date, birthday);
+    positions.push(pos.x, pos.y, pos.z);
+  }
+
+  const geo = new LineGeometry();
+  geo.setPositions(positions);
+
+  const mat = new LineMaterial({
+    color:       0xfff5e6,
+    linewidth:   3,
+    resolution:  spiralResolution,
+    transparent: true,
+    opacity:     1.0,
+  });
+
+  const line = new Line2(geo, mat);
+  line.computeLineDistances();
+  scene.add(line);
+
+  segStart = segEnd;
+}
 
 // ── Demo beads ───────────────────────────────────────────────────────────────
 
@@ -128,6 +151,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  spiralResolution.set(window.innerWidth * window.devicePixelRatio, window.innerHeight * window.devicePixelRatio);
 });
 
 // ── Auth UI ──────────────────────────────────────────────────────────────────
