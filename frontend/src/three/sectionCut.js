@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
-import { setDetailCeiling, setDetailCenter } from './cameraController.js';
+import { setDetailCeiling } from './cameraController.js';
 
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY   = 86400000;
@@ -307,10 +307,5 @@ function _applyFraction(frac, spiralTopY) {
   handleEl.style.top    = `${snappedFrac * 100}%`;
   yearLabelEl.style.top = `${snappedFrac * 100}%`;
   setSectionCutY(clipY);
-  setDetailCeiling(clipY); // no-op when not in detail mode
-
-  // Keep detail-view camera XZ on the spiral at the new date
-  const yearsElapsed = clipY / 8;
-  const cutDate = new Date(birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
-  setDetailCenter(dateToPosition(cutDate, birthdayDate)); // no-op when not in detail mode
+  setDetailCeiling(clipY); // no-op in new architecture
 }

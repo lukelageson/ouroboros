@@ -13,7 +13,9 @@ import {
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
-  setPlanTargetY, setDetailCenter,
+  setPlanTargetY,
+  applyDetailZoom, applyDetailPan,
+  onResizeDetailView,
 } from './three/cameraController.js';
 import { dateToPosition }       from './three/spiralMath.js';
 import {
@@ -80,9 +82,18 @@ const {
 let ribbonVisible = true;
 
 // Update LineMaterial resolution on resize so line widths stay correct in pixels
+let _lastResizeW = window.innerWidth;
+let _lastResizeH = window.innerHeight;
+
 window.addEventListener('resize', () => {
+  const oldW = _lastResizeW;
+  const oldH = _lastResizeH;
+  _lastResizeW = window.innerWidth;
+  _lastResizeH = window.innerHeight;
+
   updateSpiralResolution(spiralSegments);
   updateRibbonResolution(arcSegments, dividerObjects);
+  onResizeDetailView(oldW, oldH);
 });
 
 // Compute today's position on the spiral for the initial detail-view pan
@@ -221,11 +232,9 @@ canvas.addEventListener('mousedown', (e) => {
   clickDownPos = { x: e.clientX, y: e.clientY };
 
   if (getCurrentMode() === 'detail' && !isCreatePanelOpen()) {
-    _isDetailPanning   = true;
-    _panStartAngle     = Math.atan2(controls.target.z, controls.target.x);
-    _panStartClientX   = e.clientX;
-    _panStartClientY   = e.clientY;
-    _panStartCamHeight = camera.position.y - controls.target.y;
+    _isDetailPanning = true;
+    _panLastX = e.clientX;
+    _panLastY = e.clientY;
   }
 });
 
@@ -358,68 +367,10 @@ function _hideDetailYearIndicator() {
   if (_yearIndicatorEl) _yearIndicatorEl.style.display = 'none';
 }
 
-// ── Detail-view tangent panning ──────────────────────────────────────────────
-const DETAIL_SPIRAL_RADIUS = 40;
-let _isDetailPanning  = false;
-let _panStartAngle    = 0;
-let _panStartClientX  = 0;
-let _panStartClientY  = 0;
-let _panStartCamHeight = 0;
-
-/**
- * Return the world position on the spiral for a given ceiling Y.
- * Used to keep the camera locked to the spiral path between pans.
- */
-function _spiralPosAtY(y) {
-  const DAYS_IN_YEAR = 365.25, MS_PER_DAY = 86400000;
-  const dateMs = birthday.getTime() + (y / 8) * DAYS_IN_YEAR * MS_PER_DAY;
-  return dateToPosition(new Date(dateMs), birthday);
-}
-
-/** Apply tangent-constrained drag to the detail-view camera. */
-function _applyDetailPan(e) {
-  const worldPerPixel = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
-    * _panStartCamHeight / window.innerHeight;
-  const dWorldX = (e.clientX - _panStartClientX) * worldPerPixel;
-  const dWorldZ = (e.clientY - _panStartClientY) * worldPerPixel;
-
-  // Tangent direction at start angle (XZ plane; screen-right=worldX, screen-down=worldZ)
-  const tx = -Math.sin(_panStartAngle);
-  const tz =  Math.cos(_panStartAngle);
-  const move = -(dWorldX * tx + dWorldZ * tz);
-
-  const newAngle = _panStartAngle + move / DETAIL_SPIRAL_RADIUS;
-  controls.target.x = DETAIL_SPIRAL_RADIUS * Math.cos(newAngle);
-  controls.target.z = DETAIL_SPIRAL_RADIUS * Math.sin(newAngle);
-  camera.position.x = controls.target.x;
-  camera.position.z = controls.target.z;
-}
-
-/**
- * On pan release: snap the camera XZ to the nearest integer-day position
- * on the spiral, combining the current target Y (year) with the panned angle
- * (day of year) to find the closest date.
- */
-function _snapDetailToNearestDate() {
-  const DAYS_IN_YEAR = 365.25, MS_PER_DAY = 86400000, SPRING_EQUINOX_DAY = 79;
-  const currentAngle = Math.atan2(controls.target.z, controls.target.x);
-  const normAngle = ((currentAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  const dayOfYear = (normAngle / (2 * Math.PI) * DAYS_IN_YEAR + SPRING_EQUINOX_DAY) % DAYS_IN_YEAR;
-
-  const approxMs   = birthday.getTime() + (controls.target.y / 8) * DAYS_IN_YEAR * MS_PER_DAY;
-  const approxYear = new Date(approxMs).getFullYear();
-
-  let bestDate = null, bestDist = Infinity;
-  for (const yr of [approxYear - 1, approxYear, approxYear + 1]) {
-    const candidateMs = new Date(yr, 0, 1).getTime() + Math.round(dayOfYear) * MS_PER_DAY;
-    const cDate = new Date(candidateMs);
-    const cY    = dateToPosition(cDate, birthday).y;
-    const dist  = Math.abs(cY - controls.target.y);
-    if (dist < bestDist) { bestDist = dist; bestDate = cDate; }
-  }
-
-  if (bestDate) setDetailCenter(dateToPosition(bestDate, birthday));
-}
+// ── Detail-view crop pan state ────────────────────────────────────────────────
+let _isDetailPanning = false;
+let _panLastX = 0;
+let _panLastY = 0;
 
 /** Helper: open the create panel for a given empty-bead instance. */
 function _openCreateForInstance(instanceId) {
@@ -514,13 +465,17 @@ let lastMouseEvent = null;
 
 window.addEventListener('mousemove', (e) => {
   lastMouseEvent = e;
-  if (_isDetailPanning) _applyDetailPan(e);
+  if (_isDetailPanning) {
+    const dx = e.clientX - _panLastX;
+    const dy = e.clientY - _panLastY;
+    _panLastX = e.clientX;
+    _panLastY = e.clientY;
+    applyDetailPan(dx, dy);
+  }
 });
 
 window.addEventListener('mouseup', () => {
-  if (!_isDetailPanning) return;
   _isDetailPanning = false;
-  _snapDetailToNearestDate();
 });
 
 registerFrameCallback((cam) => {
@@ -703,6 +658,15 @@ function _deriveAnalysisRole(analysis, entry) {
   });
   document.getElementById('app').appendChild(btn);
 })();
+
+// ── Detail-view scroll zoom ──────────────────────────────────────────────────
+canvas.addEventListener('wheel', (e) => {
+  if (getCurrentMode() !== 'detail') return;
+  e.preventDefault();
+  // delta > 0 = scroll down = zoom in (shrink crop)
+  const zoomDelta = e.deltaY / 500;
+  applyDetailZoom(zoomDelta, e.clientX, e.clientY);
+}, { passive: false });
 
 // ── Keyboard: ribbon toggle only ────────────────────────────────────────────
 window.addEventListener('keydown', (e) => {
