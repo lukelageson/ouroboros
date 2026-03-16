@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { scene } from './renderer.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const RING_RADIUS   = 12;
+const RING_RADIUS   = 40;  // match spiral radius
 const RING_TUBE     = 0.3;
 const AMBER         = 0xf5a623;
 const DIM_COLOR     = 0x3d2e1e;
@@ -50,6 +50,9 @@ let currentEntries    = [];
 let onTriggerAnalyze = null;  // (category) => void
 let onViewAnalysis   = null;  // (analysis) => void
 
+// Hover tracking
+let hoveredRingMesh = null;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeTorus(radius, tube, color, emissiveIntensity = 0.15) {
@@ -61,7 +64,6 @@ function makeTorus(radius, tube, color, emissiveIntensity = 0.15) {
     roughness: 0.6,
     metalness: 0.2,
   });
-  mat.clippingPlanes = []; // opt out of global section-cut clip plane
   return new THREE.Mesh(geo, mat);
 }
 
@@ -77,7 +79,6 @@ function makeArc(radius, tube, fraction) {
     roughness: 0.4,
     metalness: 0.3,
   });
-  mat.clippingPlanes = []; // opt out of global section-cut clip plane
   const mesh = new THREE.Mesh(geo, mat);
   // Rotate so arc starts at "12 o'clock"
   mesh.rotation.x = Math.PI / 2;
@@ -94,6 +95,16 @@ function makeCompletedRingMesh(category, tube) {
 
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+/** Set hover state on a ring — increase brightness/glow. */
+function setRingHoverState(mesh, isHovered) {
+  if (!mesh || !mesh.material) return;
+  if (isHovered) {
+    mesh.material.emissiveIntensity = 0.8;  // brighten on hover
+  } else {
+    mesh.material.emissiveIntensity = 0.15;  // normal state
+  }
 }
 
 // ── Category Progress ────────────────────────────────────────────────────────
@@ -186,18 +197,18 @@ function positionExpandedRings() {
   let currentY = baseY;
   for (let i = 0; i < sorted.length; i++) {
     const ring = sorted[i];
-    currentY -= STACK_GAP * scale;
+    currentY += STACK_GAP * scale;  // pop UP instead of down
     ring._targetY = currentY;
     ring._sortIndex = i;
 
-    // Position completed rings below the active ring
+    // Position completed rings above the active ring
     const subH = _subStackHeight(ring);
     for (let j = 0; j < ring.completedRings.length; j++) {
       // Most recent completed ring is last in array, position it closest to active
       const cr = ring.completedRings[ring.completedRings.length - 1 - j];
-      cr._targetY = currentY - (j + 1) * SUB_GAP * scale;
+      cr._targetY = currentY + (j + 1) * SUB_GAP * scale;
     }
-    currentY -= subH * scale;
+    currentY += subH * scale;
   }
 }
 
@@ -446,6 +457,25 @@ export function getRingMeshes() {
     }
   }
   return meshes;
+}
+
+/**
+ * Set hover state on a ring mesh. Call with null to clear hover.
+ * Increases glow and scales ring for better visibility.
+ */
+export function setRingHover(mesh) {
+  if (hoveredRingMesh === mesh) return;
+
+  // Clear previous hover
+  if (hoveredRingMesh) {
+    setRingHoverState(hoveredRingMesh, false);
+  }
+
+  // Apply new hover
+  hoveredRingMesh = mesh;
+  if (mesh) {
+    setRingHoverState(mesh, true);
+  }
 }
 
 /**

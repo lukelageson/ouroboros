@@ -40,6 +40,7 @@ export function addBead(entry, birthday, animate = false) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.userData.entryId     = entry.id;
   mesh.userData.isMilestone = isMilestone;
+  mesh.userData.entryDate   = new Date(entry.entry_date);
 
   const pos = dateToPosition(new Date(entry.entry_date), birthday);
   mesh.position.copy(pos);

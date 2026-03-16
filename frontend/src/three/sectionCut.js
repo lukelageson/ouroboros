@@ -1,14 +1,9 @@
 /**
  * sectionCut.js
  *
- * Creates a WebGL clipping plane that hides the upper portion of the spiral
- * (recent years) and a minimal CSS overlay slider to control it.
- *
- * Clip plane: THREE.Plane(normal=(0,-1,0), constant=clipY)
- *   – Shows fragments where  y ≤ clipY
- *   – Default clipY = spiralTopY  →  nothing clipped, full spiral visible
- *   – Moving slider down  →  clipY decreases  →  recent years hidden
- *   – Ground plane at y=0 always satisfies 0 ≤ clipY  →  always visible
+ * Section cut slider — selects a ceiling date (in yearly increments backward
+ * from today). Elements with dates after the ceiling are hidden via date
+ * comparison; no clipping planes are used.
  *
  * UI layout: right-aligned column (right: 24px, width: 100px) matching
  * the view cube, positioned between the mood button (top) and the cube
@@ -16,7 +11,7 @@
  * label floats to the left of the handle and tracks its position.
  *
  * An end-cap disc is placed at the spiral path position of the current
- * cut Y to give the appearance of a clean perpendicular cut.
+ * ceiling date using dateToPosition().
  */
 
 import * as THREE from 'three';
@@ -35,6 +30,7 @@ const SLIDER_RIGHT  = '24px';   // same right edge as view cube
 const SLIDER_WIDTH  = '100px';  // same width as view cube
 
 let _clipY          = 0;
+let _ceilingDate    = new Date(); // Date corresponding to _clipY
 let birthdayDate    = null;
 let sliderEl        = null;
 let trackEl         = null;
@@ -57,6 +53,7 @@ export function initSectionCut(spiralTopY, birthday) {
   _spiralTopY  = spiralTopY;
   birthdayDate = new Date(birthday);
   _clipY       = spiralTopY; // default: no cut
+  _ceilingDate = new Date(); // default: today
 
   _computeYearTicks();
   _buildSliderUI(spiralTopY);
@@ -90,9 +87,17 @@ function _snapToNearestTick(y) {
   return best;
 }
 
-/** Update the section cut Y, year label, and end-cap position. */
+/** Derive a Date from a spiral Y coordinate. */
+function _yToDate(y) {
+  if (!birthdayDate) return new Date();
+  const yearsElapsed = y / 8;
+  return new Date(birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
+}
+
+/** Update the section cut Y, ceiling date, year label, and end-cap position. */
 export function setSectionCutY(y) {
-  _clipY = y;
+  _clipY       = y;
+  _ceilingDate = _yToDate(y);
   _updateYearLabel(y);
   _updateEndCap(y);
 }
@@ -100,6 +105,21 @@ export function setSectionCutY(y) {
 /** Get the current section cut Y value. */
 export function getSectionCutY() {
   return _clipY;
+}
+
+/** Get the ceiling date (Date object) corresponding to the current section cut. */
+export function getSectionCutDate() {
+  return _ceilingDate;
+}
+
+/**
+ * Get the floor date — exactly 1 year before the ceiling date.
+ * Used by Detail View to define the visible 1-year window.
+ */
+export function getFloorDate() {
+  const floor = new Date(_ceilingDate);
+  floor.setFullYear(floor.getFullYear() - 1);
+  return floor;
 }
 
 

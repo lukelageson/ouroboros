@@ -9,7 +9,7 @@ const container = document.getElementById('app');
 const webgl = new THREE.WebGLRenderer({ antialias: true });
 webgl.setSize(window.innerWidth, window.innerHeight);
 webgl.setPixelRatio(window.devicePixelRatio);
-webgl.localClippingEnabled = true; // required for per-material clipping planes
+
 container.appendChild(webgl.domElement);
 
 // CSS3D renderer

@@ -10,10 +10,6 @@ import {
   isPlanMode, isDetailMode, getCurrentMode,
   setPlanTargetY, setDetailCenter,
 } from './three/cameraController.js';
-import {
-  updateSpiralMaterial,
-  setSpiralSectionCutY, setSpiralFloorClipY, clearSpiralFloorClip,
-} from './three/spiralGeometry.js';
 import { dateToPosition }       from './three/spiralMath.js';
 import {
   initSectionCut,
@@ -21,6 +17,8 @@ import {
   hideSectionCutSlider,
   getSectionCutY,
   setSectionCutY,
+  getSectionCutDate,
+  getFloorDate,
 } from './three/sectionCut.js';
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
@@ -90,7 +88,6 @@ initViewCube(webgl, camera, controls, (mode) => {
 // ── Frame callbacks ─────────────────────────────────────────────────────────
 registerFrameCallback(() => {
   advanceTransition();
-  updateSpiralMaterial(isPlanMode());
   updateViewCube();
 
   // Slider: show in perspective, plan, and detail
@@ -104,20 +101,14 @@ registerFrameCallback(() => {
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
 
-  // Detail view: floor clip + year indicator + spiral center lock + entry labels
+  // Detail view: year indicator + entry labels
   if (mode === 'detail') {
-    const cutY = getSectionCutY();
-    const floorY = cutY - 8;
-    setSpiralFloorClipY(floorY);
-    setSpiralSectionCutY(cutY);
     _updateDetailYearIndicator(controls.target.y);
     if (ground) ground.visible = false;
 
     // Entry text labels at high zoom
     updateDetailLabels(loadedEntries, birthday, camera, controls.target.y, true);
   } else {
-    clearSpiralFloorClip();
-    setSpiralSectionCutY(getSectionCutY());
     _hideDetailYearIndicator();
     clearDetailLabels();
     if (ground) ground.visible = (mode === 'perspective');
@@ -493,35 +484,28 @@ window.addEventListener('mouseup', () => {
 
 registerFrameCallback((cam) => {
   const mode = getCurrentMode();
-  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode, getSectionCutY(), controls.target.y);
+  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode, getSectionCutDate(), getFloorDate());
 });
 
-// ── Bead visibility: section cut (perspective/plan) + detail window ──────────
+// ── Bead visibility: date-based section cut + detail window ──────────────────
 registerFrameCallback(() => {
   const mode = getCurrentMode();
+  if (mode !== 'perspective' && mode !== 'plan' && mode !== 'detail') return;
+
+  const ceilingDate = getSectionCutDate();
 
   if (mode === 'detail') {
-    const cutY = getSectionCutY();
-    const floorY = cutY - 8;
+    const floorDate = getFloorDate();
     for (const mesh of getAllBeadMeshes()) {
-      mesh.visible = mesh.position.y <= cutY && mesh.position.y >= floorY;
+      const d = mesh.userData.entryDate;
+      mesh.visible = d <= ceilingDate && d >= floorDate;
     }
     return;
   }
 
-  if (mode !== 'perspective' && mode !== 'plan') return;
-
-  // Hide any bead whose top extends above the section cut
-  const clipY = getSectionCutY();
-  const nocut = clipY >= spiralTopY - 0.1; // slider at top = no cut
-
+  // Perspective / plan: visible if entry date is on or before the ceiling date
   for (const mesh of getAllBeadMeshes()) {
-    if (nocut) {
-      mesh.visible = true;
-    } else {
-      const r = mesh.userData.isMilestone ? 0.825 : 0.45;
-      mesh.visible = mesh.position.y + r < clipY;
-    }
+    mesh.visible = mesh.userData.entryDate <= ceilingDate;
   }
 });
 

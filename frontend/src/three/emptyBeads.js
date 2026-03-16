@@ -22,6 +22,7 @@ let opacityAttr   = null;
 let instancePositions = []; // THREE.Vector3[] parallel to instance indices
 let instanceDates     = []; // ISO date strings parallel to instance indices
 let _hoveredInstanceId = -1; // instance currently under the cursor
+const _removedInstances = new Set(); // indices of removed (scale=0) instances
 
 // Reusable temporaries for per-frame distance calc
 const _ray    = new THREE.Raycaster();
@@ -121,20 +122,29 @@ export function initEmptyBeads(birthday, filledDates) {
 /**
  * Update empty-bead visibility based on mouse position and view mode.
  *
- * @param {MouseEvent|null} mouseEvent  latest mousemove event (null = hide)
- * @param {THREE.Camera}    cam         active camera
- * @param {string}          viewMode    'plan' | 'perspective' | 'detail'
+ * @param {MouseEvent|null} mouseEvent   latest mousemove event (null = hide)
+ * @param {THREE.Camera}    cam          active camera
+ * @param {string}          viewMode     'plan' | 'perspective' | 'detail'
+ * @param {Date|null}       ceilingDate  upper date bound (null = show all)
+ * @param {Date|null}       floorDate    lower date bound for detail view
  */
-export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
+export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode, ceilingDate = null, floorDate = null) {
   if (!instancedMesh || !opacityAttr) return;
 
   const arr   = opacityAttr.array;
   const count = arr.length;
 
+  const ceilISO  = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : '9999-12-31';
+  const floorISO = floorDate   ? floorDate.toISOString().slice(0, 10)   : '0000-01-01';
+
   if (viewMode === 'plan') {
-    // Plan view: all empties at constant opacity; hovered one at full
-    for (let i = 0; i < count; i++) arr[i] = 0.82;
-    if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count) {
+    // Plan view: all empties at constant opacity; hide those after the ceiling date
+    for (let i = 0; i < count; i++) {
+      arr[i] = (_removedInstances.has(i) || instanceDates[i] > ceilISO) ? 0 : 0.82;
+    }
+    if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count &&
+        !_removedInstances.has(_hoveredInstanceId) &&
+        instanceDates[_hoveredInstanceId] <= ceilISO) {
       arr[_hoveredInstanceId] = 1.0;
     }
     opacityAttr.needsUpdate = true;
@@ -142,16 +152,16 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode) {
   }
 
   if (viewMode === 'detail') {
-    // Camera is DETAIL_H=15 above the target point — compare against target Y
-    const targetY  = cam.position.y - 15;
     const camAngle = Math.atan2(cam.position.z, cam.position.x);
     for (let i = 0; i < count; i++) {
+      if (_removedInstances.has(i)) { arr[i] = 0; continue; }
+      const dateISO = instanceDates[i];
+      if (dateISO < floorISO || dateISO > ceilISO) { arr[i] = 0; continue; }
       const p = instancePositions[i];
-      const dy = Math.abs(p.y - targetY);
       let angDiff = Math.atan2(p.z, p.x) - camAngle;
       if (angDiff >  Math.PI) angDiff -= 2 * Math.PI;
       if (angDiff < -Math.PI) angDiff += 2 * Math.PI;
-      arr[i] = (dy < 8 && Math.abs(angDiff) < 1.0) ? 0.88 : 0;
+      arr[i] = Math.abs(angDiff) < 1.0 ? 0.88 : 0;
     }
     opacityAttr.needsUpdate = true;
     return;
@@ -193,12 +203,28 @@ export function hideAllEmptyBeads() {
   opacityAttr.needsUpdate = true;
 }
 
+/** Scale a single instance (does nothing if it has been removed). */
+function _setInstanceScale(idx, scale) {
+  if (!instancedMesh || idx < 0 || _removedInstances.has(idx)) return;
+  const dummy = new THREE.Object3D();
+  instancedMesh.getMatrixAt(idx, dummy.matrix);
+  dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
+  dummy.scale.setScalar(scale);
+  dummy.updateMatrix();
+  instancedMesh.setMatrixAt(idx, dummy.matrix);
+  instancedMesh.instanceMatrix.needsUpdate = true;
+}
+
 /**
  * Set which instance is currently hovered so showEmptyBeadsNearMouse
  * can boost its opacity to maximum for a clear highlight.
+ * Also scales the hovered instance up (like filled beads do).
  */
 export function setHoveredEmptyBead(instanceId) {
+  if (instanceId === _hoveredInstanceId) return;
+  if (_hoveredInstanceId >= 0) _setInstanceScale(_hoveredInstanceId, 1.0);
   _hoveredInstanceId = instanceId;
+  if (instanceId >= 0) _setInstanceScale(instanceId, 1.5);
 }
 
 /** Get the InstancedMesh (for raycasting). */
@@ -217,13 +243,13 @@ export function getEmptyBeadDate(instanceId) {
  */
 export function removeEmptyBeadInstance(instanceId) {
   if (!instancedMesh || instanceId < 0) return;
+  _removedInstances.add(instanceId);
   const dummy = new THREE.Object3D();
   dummy.position.set(0, 0, 0);
   dummy.scale.set(0, 0, 0);
   dummy.updateMatrix();
   instancedMesh.setMatrixAt(instanceId, dummy.matrix);
   instancedMesh.instanceMatrix.needsUpdate = true;
-  // Also zero the opacity
   if (opacityAttr) {
     opacityAttr.array[instanceId] = 0;
     opacityAttr.needsUpdate = true;
