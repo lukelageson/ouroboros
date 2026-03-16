@@ -8,7 +8,7 @@ import { getBeadMesh } from './beads.js';
 const MOOD_COLORS = {
   1: '#c0392b',   // red
   2: '#e67e22',   // orange
-  3: '#6b5a47',   // neutral
+  3: '#f1c40f',   // yellow
   4: '#7dbb6e',   // light green
   5: '#27ae60',   // green
 };

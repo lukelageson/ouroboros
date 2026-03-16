@@ -3,16 +3,12 @@ import { camera, controls } from './renderer.js';
 
 const TRANSITION_FRAMES = 60;
 
-// ── Plan view ──────────────────────────────────────────────────────────────
+// ── Plan / Detail view ──────────────────────────────────────────────────────
 const PLAN_H      = 180;
 const SPIRAL_RADIUS = 40;
 const PLAN_FOV    = THREE.MathUtils.radToDeg(
   2 * Math.atan(SPIRAL_RADIUS / (PLAN_H * 0.9))
 ); // ≈ 28° — outermost coil fills ~90 % of screen height
-
-// ── Detail view ────────────────────────────────────────────────────────────
-const DETAIL_H   = 15;  // world units above the spiral for the detail camera
-const DETAIL_FOV = 70;  // ~1 month of spiral arc visible from DETAIL_H above
 
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -40,9 +36,6 @@ const state = {
   // FOV lerp — smoothly changes lens length during transition
   fovStart:  60,
   fovTarget: 60,
-
-  // Detail-view pan: world-space point on the spiral surface the camera orbits
-  detailPanPos: new THREE.Vector3(),
 };
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -51,8 +44,8 @@ const state = {
  * Begin a smooth transition to the given view mode.
  *
  * 'plan'        → overhead telephoto; ring fills the frame; controls locked.
- * 'detail'      → 15 units above a spiral point; shows ~1 month; controls locked.
- *                 Pass { panPos: THREE.Vector3 } in options for the initial position.
+ * 'detail'      → same as plan but targeting today's spiral position.
+ *                 Pass { todayPos: THREE.Vector3 } in options.
  * 'perspective' → FOV-60 side view; orbit controls re-enabled.
  */
 export function setViewMode(mode, spiralTopY, options = {}) {
@@ -75,12 +68,11 @@ export function setViewMode(mode, spiralTopY, options = {}) {
     state.fovTarget = PLAN_FOV;
 
   } else if (mode === 'detail') {
-    const p = options.panPos || new THREE.Vector3(0, spiralTopY, 0);
-    state.detailPanPos.copy(p);
-    state.toPos.set(p.x, p.y + DETAIL_H, p.z);
-    state.toTarget.copy(p);
+    const p = options.todayPos || new THREE.Vector3(0, spiralTopY, 0);
+    state.toPos.set(p.x, p.y + PLAN_H, p.z);
+    state.toTarget.set(p.x, p.y, p.z);
     state.toUp.set(0, 0, -1);
-    state.fovTarget = DETAIL_FOV;
+    state.fovTarget = PLAN_FOV;
 
   } else { // 'perspective'
     state.toPos.set(0, spiralTopY + 30, spiralTopY + 60);
@@ -102,15 +94,16 @@ export function setPlanTargetY(clipY) {
 }
 
 /**
- * Pan the detail-view camera to a new world-space point on the spiral.
- * No-op if not currently in (or transitioning to) detail mode.
+ * Move the detail-view camera ceiling to a new Y.
+ * The camera height above target is preserved so zoom is maintained.
+ * No-op when not in (or transitioning to) detail mode.
  */
-export function panDetailView(worldPos) {
-  if (state.targetMode !== 'detail') return;
-  state.detailPanPos.copy(worldPos);
-  camera.position.set(worldPos.x, worldPos.y + DETAIL_H, worldPos.z);
-  camera.up.set(0, 0, -1);
-  controls.target.copy(worldPos);
+export function setDetailCeiling(cutY) {
+  if (state.targetMode !== 'detail' && state.viewMode !== 'detail') return;
+  const oldTargetY = controls.target.y;
+  const delta = cutY - oldTargetY;
+  controls.target.y = cutY;
+  camera.position.y += delta; // maintain zoom height above target
   camera.lookAt(controls.target);
 }
 
@@ -119,6 +112,18 @@ export function isPlanMode()   { return state.targetMode === 'plan';   }
 
 /** True while in (or transitioning to) detail mode. */
 export function isDetailMode() { return state.targetMode === 'detail'; }
+
+/**
+ * Snap the detail-view camera center (XZ) to a spiral position.
+ * Called each frame to lock camera to spiral path, and on pan release to snap.
+ */
+export function setDetailCenter(pos) {
+  if (state.targetMode !== 'detail' && state.viewMode !== 'detail') return;
+  controls.target.x = pos.x;
+  controls.target.z = pos.z;
+  camera.position.x = pos.x;
+  camera.position.z = pos.z;
+}
 
 /** Returns the fully-settled view mode (null before any mode is set). */
 export function getCurrentMode() { return state.viewMode; }
@@ -151,7 +156,17 @@ export function advanceTransition() {
       camera.fov = 60;
       camera.updateProjectionMatrix();
       controls.enabled = true;
+      controls.enableRotate = true;
+      controls.enablePan    = true;
+      controls.maxPolarAngle = Math.PI / 2;
+      controls.minPolarAngle = 0;
+    } else if (state.targetMode === 'detail') {
+      controls.enabled      = true;
+      controls.enableRotate = false;
+      controls.enablePan    = false;
+      controls.maxPolarAngle = 0;
+      controls.minPolarAngle = 0;
     }
-    // Plan / detail: controls stay disabled; pan is handled by panDetailView()
+    // Plan: controls stay disabled
   }
 }

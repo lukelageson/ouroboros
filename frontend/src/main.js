@@ -8,11 +8,11 @@ import { updateRibbonLabels }                  from './three/ribbon.js';
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
-  panDetailView, setPlanTargetY, setDetailZoom,
+  setPlanTargetY, setDetailCenter,
 } from './three/cameraController.js';
 import {
-  updateSpiralMaterial, updateSpiralDetailMode, clearSpiralDetailMode,
-  setSpiralSectionCutY,
+  updateSpiralMaterial,
+  setSpiralSectionCutY, setSpiralFloorClipY, clearSpiralFloorClip,
 } from './three/spiralGeometry.js';
 import { dateToPosition }       from './three/spiralMath.js';
 import {
@@ -20,11 +20,7 @@ import {
   showSectionCutSlider,
   hideSectionCutSlider,
   getSectionCutY,
-  setDetailClipWindow,
-  clearDetailClipWindow,
-  setSliderDetailMode,
-  syncSliderToPanDate,
-  setSliderPosition,
+  setSectionCutY,
 } from './three/sectionCut.js';
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
@@ -39,9 +35,6 @@ import {
 import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
 import { setPanelViewMode }                     from './three/panelManager.js';
 import { openReadOverlay, closeReadOverlay }    from './three/popups/readOverlay.js';
-import {
-  openReadOverlay2D, closeReadOverlay2D,
-} from './three/popups/readOverlay2D.js';
 import {
   openCreatePanel, closeCreatePanel, isCreatePanelOpen,
 } from './three/popups/createPanel.js';
@@ -61,10 +54,10 @@ import {
   isInAnalysisViewingMode, getGlowingMeshes, getCurrentAnalysis,
   applyBelongingIndicators,
 } from './three/analysisViewingMode.js';
-import { showAnnotation, hideAnnotation } from './three/popups/analysisAnnotation.js';
+import { showAnnotation, hideAnnotation }   from './three/popups/analysisAnnotation.js';
 import {
-  initDetailTextLayer, updateDetailTextLayer, refreshDetailEntries,
-} from './three/popups/detailTextLayer.js';
+  updateDetailLabels, clearDetailLabels,
+} from './three/popups/detailLabels.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -75,7 +68,6 @@ const {
 } = initScene();
 
 let ribbonVisible = true;
-let _prevMode = null;
 
 // Compute today's position on the spiral for the initial detail-view pan
 const todayPos = dateToPosition(today, birthday);
@@ -88,10 +80,9 @@ hideSectionCutSlider(); // hidden until perspective view is active
 initViewCube(webgl, camera, controls, (mode) => {
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'detail') {
-    panDate = new Date(today);
-    setViewMode('detail', effectiveTop, { panPos: todayPos });
+    setSectionCutY(spiralTopY); // reset ceiling to today on entry
+    setViewMode('detail', spiralTopY, { todayPos: todayPos });
   } else {
-    closeReadOverlay2D();
     setViewMode(mode, effectiveTop);
   }
 });
@@ -102,7 +93,7 @@ registerFrameCallback(() => {
   updateSpiralMaterial(isPlanMode());
   updateViewCube();
 
-  // Slider: show in perspective, plan, and detail; detail mode uses pan callback
+  // Slider: show in perspective, plan, and detail
   const mode = getCurrentMode();
   if (mode === 'perspective' || mode === 'plan' || mode === 'detail') {
     showSectionCutSlider();
@@ -110,41 +101,26 @@ registerFrameCallback(() => {
     hideSectionCutSlider();
   }
 
-  // On mode transition, wire/unwire slider detail zoom mode
-  if (mode !== _prevMode) {
-    _prevMode = mode;
-    if (mode === 'detail') {
-      // Slider controls zoom in detail view (frac: 0=zoomed in, 1=zoomed out)
-      setSliderDetailMode(true, (frac) => {
-        const heightAboveSpiral = 2 + frac * 48;  // 2-50 range (increased zoom range)
-        setDetailZoom(heightAboveSpiral);
-      }, null, 0);
-      // Set slider to mid-point for detail mode
-      setSliderPosition(0.5);
-    } else {
-      setSliderDetailMode(false, null, null, 0);
-    }
-  }
-
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
 
-  // Detail view: spiral edge fade + year indicator (clip window now shader-based)
+  // Detail view: floor clip + year indicator + spiral center lock + entry labels
   if (mode === 'detail') {
-    const detailTargetY = getActiveCamera().position.y - 15;
-    setDetailClipWindow(detailTargetY);
-    updateSpiralDetailMode(detailTargetY);
-    setSpiralSectionCutY(9999); // disable section cut in detail mode
-    _updateDetailYearIndicator(detailTargetY);
-    updateDetailTextLayer(detailTargetY, 'detail');
+    const cutY = getSectionCutY();
+    const floorY = cutY - 8;
+    setSpiralFloorClipY(floorY);
+    setSpiralSectionCutY(cutY);
+    _updateDetailYearIndicator(controls.target.y);
     if (ground) ground.visible = false;
+
+    // Entry text labels at high zoom
+    updateDetailLabels(loadedEntries, birthday, camera, controls.target.y, true);
   } else {
-    updateDetailTextLayer(0, mode || 'perspective');
-    clearDetailClipWindow();
-    clearSpiralDetailMode();
-    setSpiralSectionCutY(getSectionCutY()); // apply section cut in perspective/plan
+    clearSpiralFloorClip();
+    setSpiralSectionCutY(getSectionCutY());
     _hideDetailYearIndicator();
-    if (ground) ground.visible = true;
+    clearDetailLabels();
+    if (ground) ground.visible = (mode === 'perspective');
   }
 
   // Tell panelManager the settled view mode so it scales/orients popups correctly
@@ -173,43 +149,8 @@ registerPostRenderCallback(() => {
 // ── Start in Perspective View ────────────────────────────────────────────────
 setViewMode('perspective', spiralTopY);
 
-// ── Detail-view panning ──────────────────────────────────────────────────────
-let panDragging = false;
-let panLastX    = 0;
-let panDate     = new Date(today); // current pan position as a Date
-
-const DAYS_PER_PX = 0.5; // 1 px drag ≈ 0.5 days along the spiral
-
-const canvas = document.querySelector('canvas');
-
-canvas.addEventListener('mousedown', (e) => {
-  if (getCurrentMode() === 'detail') {
-    panDragging = true;
-    panLastX    = e.clientX;
-    canvas.style.cursor = 'grabbing';
-    e.stopPropagation(); // don't let OrbitControls intercept
-  }
-});
-
-window.addEventListener('mousemove', (e) => {
-  if (!panDragging || getCurrentMode() !== 'detail') return;
-  const dx = e.clientX - panLastX;
-  panDate   = new Date(panDate.getTime() + dx * DAYS_PER_PX * 86400000);
-  if (panDate > today)    panDate = new Date(today);
-  if (panDate < birthday) panDate = new Date(birthday);
-  panDetailView(dateToPosition(panDate, birthday));
-  // Note: slider is reserved for zoom control in detail mode, not date display
-  panLastX = e.clientX;
-});
-
-window.addEventListener('mouseup', () => {
-  if (panDragging) {
-    panDragging = false;
-    canvas.style.cursor = '';
-  }
-});
-
 // ── Click detection (beads + surface navigation) ────────────────────────────
+const canvas = document.querySelector('canvas');
 const clickRaycaster = new THREE.Raycaster();
 const clickMouse     = new THREE.Vector2();
 let   clickDownPos   = null;
@@ -242,6 +183,14 @@ canvas.addEventListener('mousemove', (e) => {
 
 canvas.addEventListener('mousedown', (e) => {
   clickDownPos = { x: e.clientX, y: e.clientY };
+
+  if (getCurrentMode() === 'detail' && !isCreatePanelOpen()) {
+    _isDetailPanning   = true;
+    _panStartAngle     = Math.atan2(controls.target.z, controls.target.x);
+    _panStartClientX   = e.clientX;
+    _panStartClientY   = e.clientY;
+    _panStartCamHeight = camera.position.y - controls.target.y;
+  }
 });
 
 canvas.addEventListener('click', (e) => {
@@ -288,11 +237,7 @@ canvas.addEventListener('click', (e) => {
       if (entry) {
         closeCreatePanel();
         closeReadOverlay();
-        if (mode === 'detail') {
-          openReadOverlay2D(entry);
-        } else {
-          openReadOverlay(entry, mesh.position);
-        }
+        openReadOverlay(entry, mesh.position);
         return;
       }
     }
@@ -321,7 +266,6 @@ canvas.addEventListener('click', (e) => {
 
   // ── 3. Close any open overlay/panel on empty click ───────────────────
   closeReadOverlay();
-  closeReadOverlay2D();
   closeCreatePanel();
   if (isInAnalysisViewingMode()) {
     hideAnnotation();
@@ -334,13 +278,11 @@ canvas.addEventListener('click', (e) => {
 
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'perspective' && spiralHits.length && spiralHits[0].point.y > effectiveTop - 16) {
-    closeReadOverlay2D();
     setViewMode('plan', effectiveTop);
   } else if (mode === 'plan') {
     const cx = window.innerWidth  / 2;
     const cy = window.innerHeight / 2;
     if (Math.hypot(e.clientX - cx, e.clientY - cy) < 150) {
-      closeReadOverlay2D();
       setViewMode('perspective', effectiveTop);
     }
   }
@@ -384,6 +326,69 @@ function _hideDetailYearIndicator() {
   if (_yearIndicatorEl) _yearIndicatorEl.style.display = 'none';
 }
 
+// ── Detail-view tangent panning ──────────────────────────────────────────────
+const DETAIL_SPIRAL_RADIUS = 40;
+let _isDetailPanning  = false;
+let _panStartAngle    = 0;
+let _panStartClientX  = 0;
+let _panStartClientY  = 0;
+let _panStartCamHeight = 0;
+
+/**
+ * Return the world position on the spiral for a given ceiling Y.
+ * Used to keep the camera locked to the spiral path between pans.
+ */
+function _spiralPosAtY(y) {
+  const DAYS_IN_YEAR = 365.25, MS_PER_DAY = 86400000;
+  const dateMs = birthday.getTime() + (y / 8) * DAYS_IN_YEAR * MS_PER_DAY;
+  return dateToPosition(new Date(dateMs), birthday);
+}
+
+/** Apply tangent-constrained drag to the detail-view camera. */
+function _applyDetailPan(e) {
+  const worldPerPixel = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
+    * _panStartCamHeight / window.innerHeight;
+  const dWorldX = (e.clientX - _panStartClientX) * worldPerPixel;
+  const dWorldZ = (e.clientY - _panStartClientY) * worldPerPixel;
+
+  // Tangent direction at start angle (XZ plane; screen-right=worldX, screen-down=worldZ)
+  const tx = -Math.sin(_panStartAngle);
+  const tz =  Math.cos(_panStartAngle);
+  const move = -(dWorldX * tx + dWorldZ * tz);
+
+  const newAngle = _panStartAngle + move / DETAIL_SPIRAL_RADIUS;
+  controls.target.x = DETAIL_SPIRAL_RADIUS * Math.cos(newAngle);
+  controls.target.z = DETAIL_SPIRAL_RADIUS * Math.sin(newAngle);
+  camera.position.x = controls.target.x;
+  camera.position.z = controls.target.z;
+}
+
+/**
+ * On pan release: snap the camera XZ to the nearest integer-day position
+ * on the spiral, combining the current target Y (year) with the panned angle
+ * (day of year) to find the closest date.
+ */
+function _snapDetailToNearestDate() {
+  const DAYS_IN_YEAR = 365.25, MS_PER_DAY = 86400000, SPRING_EQUINOX_DAY = 79;
+  const currentAngle = Math.atan2(controls.target.z, controls.target.x);
+  const normAngle = ((currentAngle % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const dayOfYear = (normAngle / (2 * Math.PI) * DAYS_IN_YEAR + SPRING_EQUINOX_DAY) % DAYS_IN_YEAR;
+
+  const approxMs   = birthday.getTime() + (controls.target.y / 8) * DAYS_IN_YEAR * MS_PER_DAY;
+  const approxYear = new Date(approxMs).getFullYear();
+
+  let bestDate = null, bestDist = Infinity;
+  for (const yr of [approxYear - 1, approxYear, approxYear + 1]) {
+    const candidateMs = new Date(yr, 0, 1).getTime() + Math.round(dayOfYear) * MS_PER_DAY;
+    const cDate = new Date(candidateMs);
+    const cY    = dateToPosition(cDate, birthday).y;
+    const dist  = Math.abs(cY - controls.target.y);
+    if (dist < bestDist) { bestDist = dist; bestDate = cDate; }
+  }
+
+  if (bestDate) setDetailCenter(dateToPosition(bestDate, birthday));
+}
+
 /** Helper: open the create panel for a given empty-bead instance. */
 function _openCreateForInstance(instanceId) {
   const dateISO = getEmptyBeadDate(instanceId);
@@ -397,7 +402,6 @@ function _openCreateForInstance(instanceId) {
       addBead(newEntry, birthday, true);
       removeEmptyBeadInstance(instanceId);
       updateProgress(loadedEntries);
-      refreshDetailEntries(loadedEntries);
       closeCreatePanel();
     } catch (err) {
       console.error('Failed to create entry:', err);
@@ -478,11 +482,18 @@ let lastMouseEvent = null;
 
 window.addEventListener('mousemove', (e) => {
   lastMouseEvent = e;
+  if (_isDetailPanning) _applyDetailPan(e);
+});
+
+window.addEventListener('mouseup', () => {
+  if (!_isDetailPanning) return;
+  _isDetailPanning = false;
+  _snapDetailToNearestDate();
 });
 
 registerFrameCallback((cam) => {
   const mode = getCurrentMode();
-  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode, getSectionCutY());
+  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode, getSectionCutY(), controls.target.y);
 });
 
 // ── Bead visibility: section cut (perspective/plan) + detail window ──────────
@@ -490,10 +501,10 @@ registerFrameCallback(() => {
   const mode = getCurrentMode();
 
   if (mode === 'detail') {
-    const detailTargetY = getActiveCamera().position.y - 15;
+    const cutY = getSectionCutY();
+    const floorY = cutY - 8;
     for (const mesh of getAllBeadMeshes()) {
-      const dy = mesh.position.y - detailTargetY;
-      mesh.visible = dy >= -8 && dy <= 5;
+      mesh.visible = mesh.position.y <= cutY && mesh.position.y >= floorY;
     }
     return;
   }
@@ -683,7 +694,6 @@ let loadedEntries = [];
 async function loadEntries() {
   loadedEntries = await api.getEntries();
   initBeads(loadedEntries, birthday);
-  initDetailTextLayer(loadedEntries, birthday);
 
   // Empty beads for all unfilled dates
   const filledDates = loadedEntries.map(e => e.entry_date);
@@ -768,7 +778,6 @@ async function loadEntries() {
       loadedEntries.push(newEntry);
       addBead(newEntry, birthday, true);
       updateProgress(loadedEntries);
-      refreshDetailEntries(loadedEntries);
       // Find and hide the matching empty bead instance
       const emptyMesh = getEmptyBeadMesh();
       if (emptyMesh) {

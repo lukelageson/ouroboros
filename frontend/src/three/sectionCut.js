@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
+import { setDetailCeiling, setDetailCenter } from './cameraController.js';
 
 const DAYS_IN_YEAR = 365.25;
 const MS_PER_DAY   = 86400000;
@@ -41,12 +42,7 @@ let handleEl        = null;
 let yearLabelEl     = null;
 let capMesh         = null;   // end-cap disc at cut position
 let _spiralTopY     = 0;
-
-// Detail pan mode state
-let _detailPanMode  = false;
-let _detailPanCb    = null;   // (date: Date) => void
-let _detailBirthday = null;   // Date
-let _detailTotalMs  = 0;
+let _tickYs         = [];     // year-boundary Y values for snapping
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -62,8 +58,36 @@ export function initSectionCut(spiralTopY, birthday) {
   birthdayDate = new Date(birthday);
   _clipY       = spiralTopY; // default: no cut
 
+  _computeYearTicks();
   _buildSliderUI(spiralTopY);
   _buildEndCap(spiralTopY);
+}
+
+/**
+ * Pre-compute the Y values for "today's month/day in each year from birthday to today".
+ * The slider snaps to these values so it always lands on a whole year.
+ */
+function _computeYearTicks() {
+  _tickYs = [];
+  const todayNow = new Date();
+  const startYear = birthdayDate.getFullYear();
+  const endYear   = todayNow.getFullYear();
+  for (let yr = startYear; yr <= endYear; yr++) {
+    const tickDate = new Date(yr, todayNow.getMonth(), todayNow.getDate());
+    if (tickDate < birthdayDate || tickDate > todayNow) continue;
+    const pos = dateToPosition(tickDate, birthdayDate);
+    _tickYs.push(pos.y);
+  }
+}
+
+function _snapToNearestTick(y) {
+  if (!_tickYs.length) return y;
+  let best = _tickYs[0], bestDist = Infinity;
+  for (const ty of _tickYs) {
+    const d = Math.abs(ty - y);
+    if (d < bestDist) { bestDist = d; best = ty; }
+  }
+  return best;
 }
 
 /** Update the section cut Y, year label, and end-cap position. */
@@ -78,49 +102,6 @@ export function getSectionCutY() {
   return _clipY;
 }
 
-/**
- * No-op: detail clip window is now handled via shader uniforms and bead
- * visibility filtering rather than WebGL clip planes.
- */
-export function setDetailClipWindow(_targetY) {
-  // Intentionally empty — detail-mode clipping done in spiralGeometry.js shader
-  // and bead visibility callback in main.js.
-}
-
-/** No-op: kept for API compatibility. */
-export function clearDetailClipWindow() {
-  // Intentionally empty
-}
-
-/**
- * Switch the slider between section-cut mode and detail-pan mode.
- * In detail-pan mode the slider pans the detail view date instead of cutting.
- *
- * @param {boolean}  isDetail  true = detail pan, false = section cut
- * @param {function} panCb     (date: Date) => void  called on drag
- * @param {Date}     bday      user birthday
- * @param {number}   totalMs   today - birthday in ms
- */
-export function setSliderDetailMode(isDetail, panCb, bday, totalMs) {
-  if (_detailPanMode === isDetail) return;
-  _detailPanMode  = isDetail;
-  _detailPanCb    = panCb   || null;
-  _detailBirthday = bday    ? new Date(bday) : null;
-  _detailTotalMs  = totalMs || 0;
-}
-
-/**
- * Move the slider handle to match a given pan date (detail mode only).
- * frac=0 (top) = today, frac=1 (bottom) = birthday.
- */
-export function syncSliderToPanDate(date) {
-  if (!handleEl || !_detailPanMode || !_detailBirthday || !_detailTotalMs) return;
-  const elapsed = date.getTime() - _detailBirthday.getTime();
-  const frac    = 1 - Math.max(0, Math.min(1, elapsed / _detailTotalMs));
-  handleEl.style.top    = `${frac * 100}%`;
-  yearLabelEl.style.top = `${frac * 100}%`;
-  yearLabelEl.textContent = date.getFullYear();
-}
 
 export function showSectionCutSlider() {
   if (sliderEl) sliderEl.style.display = 'flex';
@@ -293,21 +274,23 @@ function _initDrag(spiralTopY) {
 }
 
 /**
- * frac = 0 → handle at top  → section cut: clipY = spiralTopY (no cut)
- *                           → detail zoom: height = 5 (zoomed in)
- * frac = 1 → handle at bottom → section cut: clipY = 0
- *                              → detail zoom: height = 30 (zoomed out)
+ * frac = 0 → handle at top    → clipY = spiralTopY (no cut / ceiling at today)
+ * frac = 1 → handle at bottom → clipY = 0
+ *
+ * Snaps to the nearest whole-year tick so the slider always lands on a year.
  */
 function _applyFraction(frac, spiralTopY) {
-  handleEl.style.top    = `${frac * 100}%`;
-  yearLabelEl.style.top = `${frac * 100}%`;
+  const rawClipY   = spiralTopY * (1 - frac);
+  const clipY      = _snapToNearestTick(rawClipY);
+  const snappedFrac = 1 - clipY / spiralTopY;
 
-  if (_detailPanMode && _detailPanCb) {
-    // Detail zoom mode: callback receives fraction directly (0=zoomed in, 1=zoomed out)
-    yearLabelEl.textContent = ''; // no year label in zoom mode
-    _detailPanCb(frac);
-  } else {
-    const clipY = spiralTopY * (1 - frac);
-    setSectionCutY(clipY);
-  }
+  handleEl.style.top    = `${snappedFrac * 100}%`;
+  yearLabelEl.style.top = `${snappedFrac * 100}%`;
+  setSectionCutY(clipY);
+  setDetailCeiling(clipY); // no-op when not in detail mode
+
+  // Keep detail-view camera XZ on the spiral at the new date
+  const yearsElapsed = clipY / 8;
+  const cutDate = new Date(birthdayDate.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
+  setDetailCenter(dateToPosition(cutDate, birthdayDate)); // no-op when not in detail mode
 }
