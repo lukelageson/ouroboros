@@ -8,10 +8,11 @@ import { updateRibbonLabels }                  from './three/ribbon.js';
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
-  panDetailView, setPlanTargetY,
+  panDetailView, setPlanTargetY, setDetailZoom,
 } from './three/cameraController.js';
 import {
   updateSpiralMaterial, updateSpiralDetailMode, clearSpiralDetailMode,
+  setSpiralSectionCutY,
 } from './three/spiralGeometry.js';
 import { dateToPosition }       from './three/spiralMath.js';
 import {
@@ -21,6 +22,9 @@ import {
   getSectionCutY,
   setDetailClipWindow,
   clearDetailClipWindow,
+  setSliderDetailMode,
+  syncSliderToPanDate,
+  setSliderPosition,
 } from './three/sectionCut.js';
 import {
   initViewCube, updateViewCube, renderViewCube, isInCubeArea,
@@ -48,7 +52,7 @@ import {
   initRingStack, expandStack, collapseStack, updateRingStack,
   getRingMeshes, handleRingClick, isExpanded, getStackGroup,
   updateProgress, addCompletedRing, setRingComputing,
-  getRingPosition, getCompletedAnalyses,
+  getRingPosition, getCompletedAnalyses, setRingHover,
 } from './three/analysisRings.js';
 import { runParticleRain } from './three/particleRain.js';
 import { getBeadMesh } from './three/beads.js';
@@ -71,6 +75,7 @@ const {
 } = initScene();
 
 let ribbonVisible = true;
+let _prevMode = null;
 
 // Compute today's position on the spiral for the initial detail-view pan
 const todayPos = dateToPosition(today, birthday);
@@ -97,19 +102,39 @@ registerFrameCallback(() => {
   updateSpiralMaterial(isPlanMode());
   updateViewCube();
 
-  // Show section cut slider in perspective and plan views
+  // Slider: show in perspective, plan, and detail; detail mode uses pan callback
   const mode = getCurrentMode();
-  if (mode === 'perspective' || mode === 'plan') showSectionCutSlider();
-  else                                           hideSectionCutSlider();
+  if (mode === 'perspective' || mode === 'plan' || mode === 'detail') {
+    showSectionCutSlider();
+  } else {
+    hideSectionCutSlider();
+  }
+
+  // On mode transition, wire/unwire slider detail zoom mode
+  if (mode !== _prevMode) {
+    _prevMode = mode;
+    if (mode === 'detail') {
+      // Slider controls zoom in detail view (frac: 0=zoomed in, 1=zoomed out)
+      setSliderDetailMode(true, (frac) => {
+        const heightAboveSpiral = 2 + frac * 48;  // 2-50 range (increased zoom range)
+        setDetailZoom(heightAboveSpiral);
+      }, null, 0);
+      // Set slider to mid-point for detail mode
+      setSliderPosition(0.5);
+    } else {
+      setSliderDetailMode(false, null, null, 0);
+    }
+  }
 
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
 
-  // Detail view: two-plane clip window + spiral edge fade + year indicator
+  // Detail view: spiral edge fade + year indicator (clip window now shader-based)
   if (mode === 'detail') {
     const detailTargetY = getActiveCamera().position.y - 15;
     setDetailClipWindow(detailTargetY);
     updateSpiralDetailMode(detailTargetY);
+    setSpiralSectionCutY(9999); // disable section cut in detail mode
     _updateDetailYearIndicator(detailTargetY);
     updateDetailTextLayer(detailTargetY, 'detail');
     if (ground) ground.visible = false;
@@ -117,6 +142,7 @@ registerFrameCallback(() => {
     updateDetailTextLayer(0, mode || 'perspective');
     clearDetailClipWindow();
     clearSpiralDetailMode();
+    setSpiralSectionCutY(getSectionCutY()); // apply section cut in perspective/plan
     _hideDetailYearIndicator();
     if (ground) ground.visible = true;
   }
@@ -172,6 +198,7 @@ window.addEventListener('mousemove', (e) => {
   if (panDate > today)    panDate = new Date(today);
   if (panDate < birthday) panDate = new Date(birthday);
   panDetailView(dateToPosition(panDate, birthday));
+  // Note: slider is reserved for zoom control in detail mode, not date display
   panLastX = e.clientX;
 });
 
@@ -186,6 +213,32 @@ window.addEventListener('mouseup', () => {
 const clickRaycaster = new THREE.Raycaster();
 const clickMouse     = new THREE.Vector2();
 let   clickDownPos   = null;
+
+// ── Ring hover detection ────────────────────────────────────────────────────
+const ringHoverRaycaster = new THREE.Raycaster();
+const ringHoverMouse = new THREE.Vector2();
+
+canvas.addEventListener('mousemove', (e) => {
+  // Check for ring hovers with distance threshold (hover radius)
+  const mode = getCurrentMode();
+  if (mode === 'perspective') {
+    const ringMeshes = getRingMeshes();
+    if (ringMeshes.length) {
+      ringHoverMouse.x =  (e.clientX / window.innerWidth)  * 2 - 1;
+      ringHoverMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      const activeCam = getActiveCamera();
+      ringHoverRaycaster.setFromCamera(ringHoverMouse, activeCam);
+      ringHoverRaycaster.params.Points.threshold = 2;  // hover radius: 2 units
+
+      const ringHits = ringHoverRaycaster.intersectObjects(ringMeshes, false);
+      setRingHover(ringHits.length > 0 ? ringHits[0].object : null);
+    } else {
+      setRingHover(null);
+    }
+  } else {
+    setRingHover(null);
+  }
+});
 
 canvas.addEventListener('mousedown', (e) => {
   clickDownPos = { x: e.clientX, y: e.clientY };
@@ -259,12 +312,10 @@ canvas.addEventListener('click', (e) => {
           _openCreateForInstance(instId);
           return;
         }
-      } else if (mode === 'plan') {
-        // Plan view: always allow
+      } else if (mode === 'plan' || mode === 'detail') {
         _openCreateForInstance(instId);
         return;
       }
-      // detail mode: no create panel on empty bead click
     }
   }
 
@@ -431,16 +482,25 @@ window.addEventListener('mousemove', (e) => {
 
 registerFrameCallback((cam) => {
   const mode = getCurrentMode();
-  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode);
+  showEmptyBeadsNearMouse(lastMouseEvent, cam, mode, getSectionCutY());
 });
 
-// ── Section cut: hide beads that would appear half-cut ──────────────────────
-// In perspective/plan mode, hide any bead whose top extends above the cut plane
-// so no bead ever appears sliced in half.
+// ── Bead visibility: section cut (perspective/plan) + detail window ──────────
 registerFrameCallback(() => {
   const mode = getCurrentMode();
+
+  if (mode === 'detail') {
+    const detailTargetY = getActiveCamera().position.y - 15;
+    for (const mesh of getAllBeadMeshes()) {
+      const dy = mesh.position.y - detailTargetY;
+      mesh.visible = dy >= -8 && dy <= 5;
+    }
+    return;
+  }
+
   if (mode !== 'perspective' && mode !== 'plan') return;
 
+  // Hide any bead whose top extends above the section cut
   const clipY = getSectionCutY();
   const nocut = clipY >= spiralTopY - 0.1; // slider at top = no cut
 
@@ -456,13 +516,33 @@ registerFrameCallback(() => {
 
 // ── Bead hover highlighting ──────────────────────────────────────────────────
 const hoverRaycaster = new THREE.Raycaster();
+hoverRaycaster.params.Points = { threshold: 2 };
+hoverRaycaster.params.Mesh   = { threshold: 0.8 };
 const hoverMouse     = new THREE.Vector2();
-let   _hoveredBeadMesh = null;
+let   _hoveredBeadMesh       = null;
+let   _hoveredBeadScreenPos  = null; // for sticky hover
+
+/** Project a world position to CSS pixel coords (for sticky hover). */
+function _worldToScreen(worldPos) {
+  const v = worldPos.clone().project(getActiveCamera());
+  return {
+    x: (v.x + 1) * 0.5 * window.innerWidth,
+    y: (-v.y + 1) * 0.5 * window.innerHeight,
+  };
+}
 
 registerFrameCallback((cam) => {
   // Skip when analysis viewing mode has its own hover logic
   if (isInAnalysisViewingMode()) return;
   if (!lastMouseEvent) return;
+
+  // Release hover immediately if the bead became invisible
+  if (_hoveredBeadMesh && !_hoveredBeadMesh.visible) {
+    _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+    _hoveredBeadMesh.scale.setScalar(1.0);
+    _hoveredBeadMesh = null;
+    _hoveredBeadScreenPos = null;
+  }
 
   hoverMouse.x =  (lastMouseEvent.clientX / window.innerWidth)  * 2 - 1;
   hoverMouse.y = -(lastMouseEvent.clientY / window.innerHeight) * 2 + 1;
@@ -473,22 +553,36 @@ registerFrameCallback((cam) => {
   const beadHits   = hoverRaycaster.intersectObjects(beadMeshes, false);
   const newHovered = beadHits.length ? beadHits[0].object : null;
 
-  if (_hoveredBeadMesh !== newHovered) {
-    if (_hoveredBeadMesh) {
-      _hoveredBeadMesh.material.emissiveIntensity = 0.3;
-      _hoveredBeadMesh.scale.setScalar(1.0);
-    }
-    if (newHovered) {
+  if (newHovered) {
+    // Ray hit a bead — switch if it's a different one
+    if (_hoveredBeadMesh !== newHovered) {
+      if (_hoveredBeadMesh) {
+        _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+        _hoveredBeadMesh.scale.setScalar(1.0);
+      }
       newHovered.material.emissiveIntensity = 0.85;
       newHovered.scale.setScalar(1.2);
+      _hoveredBeadMesh = newHovered;
     }
-    _hoveredBeadMesh = newHovered;
+    // Keep screen projection up to date (camera may move)
+    _hoveredBeadScreenPos = _worldToScreen(_hoveredBeadMesh.position);
+  } else if (_hoveredBeadMesh) {
+    // No ray hit — only un-hover if mouse moved > 5 px from bead's screen position
+    const sp = _hoveredBeadScreenPos;
+    const tooFar = !sp ||
+      Math.hypot(lastMouseEvent.clientX - sp.x, lastMouseEvent.clientY - sp.y) > 5;
+    if (tooFar) {
+      _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+      _hoveredBeadMesh.scale.setScalar(1.0);
+      _hoveredBeadMesh = null;
+      _hoveredBeadScreenPos = null;
+    }
   }
 
-  // ── Empty beads ──────────────────────────────────────────────────────
+  // ── Empty beads (only when no filled bead is hovered) ────────────────
   const emptyMesh = getEmptyBeadMesh();
   let newHoveredEmptyId = -1;
-  if (emptyMesh && !newHovered) {
+  if (emptyMesh && !_hoveredBeadMesh) {
     const emptyHits = hoverRaycaster.intersectObject(emptyMesh, false);
     if (emptyHits.length) newHoveredEmptyId = emptyHits[0].instanceId;
   }
@@ -536,6 +630,43 @@ function _deriveAnalysisRole(analysis, entry) {
   }
   return sentences[0] ? sentences[0].trim() : 'Related to this pattern';
 }
+
+// ── Logout button ────────────────────────────────────────────────────────────
+(function _buildLogoutButton() {
+  const btn = document.createElement('button');
+  btn.textContent = 'LOG OUT';
+  Object.assign(btn.style, {
+    position:      'fixed',
+    bottom:        '8px',
+    right:         '24px',
+    width:         '100px',
+    padding:       '5px 0',
+    background:    'transparent',
+    border:        '1px solid rgba(245,166,35,0.25)',
+    borderRadius:  '4px',
+    color:         'rgba(245,166,35,0.5)',
+    fontFamily:    'monospace',
+    fontSize:      '10px',
+    letterSpacing: '1.5px',
+    cursor:        'pointer',
+    zIndex:        '100',
+    pointerEvents: 'auto',
+    transition:    'color 150ms ease, border-color 150ms ease',
+  });
+  btn.addEventListener('mouseenter', () => {
+    btn.style.color       = 'rgba(245,166,35,0.9)';
+    btn.style.borderColor = 'rgba(245,166,35,0.6)';
+  });
+  btn.addEventListener('mouseleave', () => {
+    btn.style.color       = 'rgba(245,166,35,0.5)';
+    btn.style.borderColor = 'rgba(245,166,35,0.25)';
+  });
+  btn.addEventListener('click', async () => {
+    try { await api.logout(); } catch { /* ignore */ }
+    window.location.href = '/';
+  });
+  document.getElementById('app').appendChild(btn);
+})();
 
 // ── Keyboard: ribbon toggle only ────────────────────────────────────────────
 window.addEventListener('keydown', (e) => {

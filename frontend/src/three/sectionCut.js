@@ -20,7 +20,7 @@
  */
 
 import * as THREE from 'three';
-import { webgl, scene } from './renderer.js';
+import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
 const DAYS_IN_YEAR = 365.25;
@@ -33,9 +33,7 @@ const SLIDER_BOTTOM = '132px';  // 24px margin + 100px cube + 8px gap
 const SLIDER_RIGHT  = '24px';   // same right edge as view cube
 const SLIDER_WIDTH  = '100px';  // same width as view cube
 
-let clipPlane        = null;
-let detailUpperPlane = null; // detail view: y <= targetY + 5
-let detailLowerPlane = null; // detail view: y >= targetY - 8
+let _clipY          = 0;
 let birthdayDate    = null;
 let sliderEl        = null;
 let trackEl         = null;
@@ -43,6 +41,12 @@ let handleEl        = null;
 let yearLabelEl     = null;
 let capMesh         = null;   // end-cap disc at cut position
 let _spiralTopY     = 0;
+
+// Detail pan mode state
+let _detailPanMode  = false;
+let _detailPanCb    = null;   // (date: Date) => void
+let _detailBirthday = null;   // Date
+let _detailTotalMs  = 0;
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -56,55 +60,66 @@ let _spiralTopY     = 0;
 export function initSectionCut(spiralTopY, birthday) {
   _spiralTopY  = spiralTopY;
   birthdayDate = new Date(birthday);
-
-  // Clip plane: normal (0,-1,0) → shows y ≤ constant.
-  // Default constant = spiralTopY → nothing clipped.
-  clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), spiralTopY);
-  webgl.clippingPlanes = [clipPlane];
+  _clipY       = spiralTopY; // default: no cut
 
   _buildSliderUI(spiralTopY);
   _buildEndCap(spiralTopY);
 }
 
-/** Update the clip-plane height, year label, and end-cap position. */
+/** Update the section cut Y, year label, and end-cap position. */
 export function setSectionCutY(y) {
-  if (!clipPlane) return;
-  clipPlane.constant = y;
+  _clipY = y;
   _updateYearLabel(y);
   _updateEndCap(y);
 }
 
-/** Get the current clip-plane Y value. */
+/** Get the current section cut Y value. */
 export function getSectionCutY() {
-  return clipPlane ? clipPlane.constant : _spiralTopY;
+  return _clipY;
 }
 
 /**
- * Replace the global clip planes with a tight two-plane window around targetY.
- * Shows: targetY - 8  <=  y  <=  targetY + 5
- * Called each frame while in detail mode.
- * @param {number} targetY  world-Y of the spiral point the camera is centred on
+ * No-op: detail clip window is now handled via shader uniforms and bead
+ * visibility filtering rather than WebGL clip planes.
  */
-export function setDetailClipWindow(targetY) {
-  const upperY = targetY + 5;
-  const lowerY = targetY - 8;
-  if (!detailUpperPlane) {
-    detailUpperPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0),  upperY);
-    detailLowerPlane = new THREE.Plane(new THREE.Vector3(0,  1, 0), -lowerY);
-    webgl.clippingPlanes = [detailUpperPlane, detailLowerPlane];
-  } else {
-    detailUpperPlane.constant =  upperY;
-    detailLowerPlane.constant = -lowerY;
-  }
+export function setDetailClipWindow(_targetY) {
+  // Intentionally empty — detail-mode clipping done in spiralGeometry.js shader
+  // and bead visibility callback in main.js.
 }
 
-/** Restore the global section-cut plane (call when leaving detail view). */
+/** No-op: kept for API compatibility. */
 export function clearDetailClipWindow() {
-  if (detailUpperPlane || detailLowerPlane) {
-    webgl.clippingPlanes = clipPlane ? [clipPlane] : [];
-    detailUpperPlane = null;
-    detailLowerPlane = null;
-  }
+  // Intentionally empty
+}
+
+/**
+ * Switch the slider between section-cut mode and detail-pan mode.
+ * In detail-pan mode the slider pans the detail view date instead of cutting.
+ *
+ * @param {boolean}  isDetail  true = detail pan, false = section cut
+ * @param {function} panCb     (date: Date) => void  called on drag
+ * @param {Date}     bday      user birthday
+ * @param {number}   totalMs   today - birthday in ms
+ */
+export function setSliderDetailMode(isDetail, panCb, bday, totalMs) {
+  if (_detailPanMode === isDetail) return;
+  _detailPanMode  = isDetail;
+  _detailPanCb    = panCb   || null;
+  _detailBirthday = bday    ? new Date(bday) : null;
+  _detailTotalMs  = totalMs || 0;
+}
+
+/**
+ * Move the slider handle to match a given pan date (detail mode only).
+ * frac=0 (top) = today, frac=1 (bottom) = birthday.
+ */
+export function syncSliderToPanDate(date) {
+  if (!handleEl || !_detailPanMode || !_detailBirthday || !_detailTotalMs) return;
+  const elapsed = date.getTime() - _detailBirthday.getTime();
+  const frac    = 1 - Math.max(0, Math.min(1, elapsed / _detailTotalMs));
+  handleEl.style.top    = `${frac * 100}%`;
+  yearLabelEl.style.top = `${frac * 100}%`;
+  yearLabelEl.textContent = date.getFullYear();
 }
 
 export function showSectionCutSlider() {
@@ -115,6 +130,13 @@ export function showSectionCutSlider() {
 export function hideSectionCutSlider() {
   if (sliderEl) sliderEl.style.display = 'none';
   if (capMesh)  capMesh.visible = false;
+}
+
+/** Set slider handle to a specific fraction (0-1). */
+export function setSliderPosition(frac) {
+  const clampedFrac = Math.max(0, Math.min(1, frac));
+  if (handleEl) handleEl.style.top = `${clampedFrac * 100}%`;
+  if (yearLabelEl) yearLabelEl.style.top = `${clampedFrac * 100}%`;
 }
 
 // ── End-cap disc ─────────────────────────────────────────────────────────────
@@ -271,12 +293,21 @@ function _initDrag(spiralTopY) {
 }
 
 /**
- * frac = 0 → handle at top  → clipY = spiralTopY (all visible, no cut)
- * frac = 1 → handle at bottom → clipY = 0 (only ground visible)
+ * frac = 0 → handle at top  → section cut: clipY = spiralTopY (no cut)
+ *                           → detail zoom: height = 5 (zoomed in)
+ * frac = 1 → handle at bottom → section cut: clipY = 0
+ *                              → detail zoom: height = 30 (zoomed out)
  */
 function _applyFraction(frac, spiralTopY) {
   handleEl.style.top    = `${frac * 100}%`;
   yearLabelEl.style.top = `${frac * 100}%`;
-  const clipY = spiralTopY * (1 - frac);
-  setSectionCutY(clipY);
+
+  if (_detailPanMode && _detailPanCb) {
+    // Detail zoom mode: callback receives fraction directly (0=zoomed in, 1=zoomed out)
+    yearLabelEl.textContent = ''; // no year label in zoom mode
+    _detailPanCb(frac);
+  } else {
+    const clipY = spiralTopY * (1 - frac);
+    setSectionCutY(clipY);
+  }
 }
