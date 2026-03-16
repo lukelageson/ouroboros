@@ -61,6 +61,13 @@ import { showAnnotation, hideAnnotation }   from './three/popups/analysisAnnotat
 import {
   updateDetailLabels, clearDetailLabels,
 } from './three/popups/detailLabels.js';
+import {
+  initRadialDateLine, updateRadialDateLine,
+  getSelectedDayOfYear, setRadialDateLineVisible, onDateLineChange,
+} from './three/radialDateLine.js';
+import {
+  initEntryColumn, updateEntryColumn, showEntryColumn, hideEntryColumn,
+} from './ui/entryColumn.js';
 
 // ── Init ────────────────────────────────────────────────────────────────────
 initRenderer();
@@ -81,9 +88,16 @@ window.addEventListener('resize', () => {
 // Compute today's position on the spiral for the initial detail-view pan
 const todayPos = dateToPosition(today, birthday);
 
-// Section cut: global clip plane + slider UI
+// Section cut slider UI
 initSectionCut(spiralTopY, birthday);
 hideSectionCutSlider(); // hidden until perspective view is active
+
+// Radial date line + entry column (Plan View only)
+initRadialDateLine(spiralTopY, birthday);
+initEntryColumn();
+onDateLineChange((doy) => {
+  updateEntryColumn(doy, getSectionCutDate(), loadedEntries, birthday);
+});
 
 // ── View Cube ───────────────────────────────────────────────────────────────
 initViewCube(webgl, camera, controls, (mode) => {
@@ -134,6 +148,17 @@ registerFrameCallback(() => {
     ringGroup.visible = (mode === 'perspective');
   }
   updateRingStack(performance.now() / 1000);
+
+  // Radial date line + entry column: Plan View only
+  const inPlan = mode === 'plan';
+  setRadialDateLineVisible(inPlan);
+  if (inPlan) {
+    updateRadialDateLine(getSectionCutDate());
+    showEntryColumn();
+    updateEntryColumn(getSelectedDayOfYear(), getSectionCutDate(), loadedEntries, birthday);
+  } else {
+    hideEntryColumn();
+  }
 });
 
 registerFrameCallback((cam) => {
