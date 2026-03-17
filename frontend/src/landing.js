@@ -2,12 +2,12 @@
  * landing.js — Standalone Three.js scene for the Ouroboros landing page.
  * Demo spiral with hardcoded birthday (40 years ago) and seeded entries.
  * Auto-rotates in perspective view. No backend calls except auth.
+ *
+ * Spiral rendered as white dot Points cloud with sizeAttenuation: true,
+ * matching the main app's perspective view exactly.
  */
 
 import * as THREE from 'three';
-import { Line2 } from 'three/addons/lines/Line2.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { dateToPosition, dateToAngle } from './three/spiralMath.js';
 import * as api from './api.js';
 
@@ -20,8 +20,8 @@ renderer.setPixelRatio(window.devicePixelRatio);
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color('#0e0a06');
-scene.fog = new THREE.FogExp2(0x0e0a06, 0.0018);
+scene.background = new THREE.Color('#000000');
+scene.fog = new THREE.FogExp2(0x000000, 0.0015);
 
 const camera = new THREE.PerspectiveCamera(
   55,
@@ -32,71 +32,75 @@ const camera = new THREE.PerspectiveCamera(
 camera.position.set(0, 140, 110);
 camera.lookAt(0, 140, 0);
 
-// Lighting
-scene.add(new THREE.AmbientLight(0xffe8c0, 0.35));
-const dir = new THREE.DirectionalLight(0xffe8c0, 1.0);
+// Lighting — match main app
+scene.add(new THREE.AmbientLight(0xffe8c0, 0.3));
+const dir = new THREE.DirectionalLight(0xffe8c0, 1.2);
 dir.position.set(50, 350, 30);
 scene.add(dir);
 
-// ── Demo spiral ──────────────────────────────────────────────────────────────
+// ── Demo dot cloud ───────────────────────────────────────────────────────────
 
 const DAYS_IN_YEAR = 365;
 const MS_PER_DAY = 86400000;
 const today = new Date();
 const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
-const totalMs = today - birthday;
-const spiralTopY = (totalMs / (DAYS_IN_YEAR * MS_PER_DAY)) * 8;
 
-// Build weekly Line2 segments (same approach as main app)
-const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
-const dpr = window.devicePixelRatio;
-const spiralResolution = new THREE.Vector2(
-  window.innerWidth * dpr,
-  window.innerHeight * dpr
-);
-
-let segStart = new Date(birthday);
-while (segStart < today) {
-  const segEndMs = Math.min(segStart.getTime() + MS_PER_WEEK, today.getTime());
-  const segEnd   = new Date(segEndMs);
-  const spanMs   = segEnd - segStart;
-
-  const positions = [];
-  const N = 10;
-  for (let i = 0; i <= N; i++) {
-    const frac = i / N;
-    const date = new Date(segStart.getTime() + frac * spanMs);
-    const pos  = dateToPosition(date, birthday);
+// Generate one point per day
+const bday = new Date(birthday);
+bday.setHours(0, 0, 0, 0);
+const todayClean = new Date(today);
+todayClean.setHours(0, 0, 0, 0);
+const positions = [];
+const cur = new Date(bday);
+while (cur <= todayClean) {
+  if (!(cur.getMonth() === 1 && cur.getDate() === 29)) {
+    const pos = dateToPosition(new Date(cur), bday);
     positions.push(pos.x, pos.y, pos.z);
   }
-
-  const geo = new LineGeometry();
-  geo.setPositions(positions);
-
-  const mat = new LineMaterial({
-    color:       0xffe4b5,
-    linewidth:   2,
-    resolution:  spiralResolution,
-    transparent: true,
-    opacity:     1.0,
-  });
-
-  const line = new Line2(geo, mat);
-  line.computeLineDistances();
-  scene.add(line);
-
-  segStart = segEnd;
+  cur.setTime(cur.getTime() + MS_PER_DAY);
 }
+
+const dotGeo = new THREE.BufferGeometry();
+dotGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+
+// Same shader as main app emptyBeads.js — sizeAttenuation: true
+const dotMat = new THREE.ShaderMaterial({
+  uniforms: {
+    color: { value: new THREE.Color(0xffffff) },
+    size:  { value: 4 },
+  },
+  vertexShader: `
+    uniform float size;
+    void main() {
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = size * (300.0 / -mvPosition.z);
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 color;
+    void main() {
+      vec2 center = gl_PointCoord - vec2(0.5);
+      if (length(center) > 0.5) discard;
+      gl_FragColor = vec4(color, 0.5);
+    }
+  `,
+  transparent: true,
+  depthWrite: false,
+});
+
+const dotCloud = new THREE.Points(dotGeo, dotMat);
+scene.add(dotCloud);
 
 // ── Demo beads ───────────────────────────────────────────────────────────────
 
 const demoEntries = [
-  { yearsAgo: 38, color: '#e74c3c' },  // early childhood
-  { yearsAgo: 30, color: '#3498db' },  // age 10
-  { yearsAgo: 22, color: '#2ecc71' },  // age 18
-  { yearsAgo: 15, color: '#f39c12' },  // age 25
-  { yearsAgo: 5,  color: '#9b59b6' },  // age 35
-  { yearsAgo: 0.5, color: '#e67e22' }, // recent
+  { yearsAgo: 38, color: '#e74c3c' },
+  { yearsAgo: 30, color: '#3498db' },
+  { yearsAgo: 22, color: '#2ecc71' },
+  { yearsAgo: 15, color: '#f39c12' },
+  { yearsAgo: 5,  color: '#9b59b6' },
+  { yearsAgo: 0.5, color: '#e67e22' },
 ];
 
 const beadGeo = new THREE.SphereGeometry(0.45, 16, 12);
@@ -117,16 +121,9 @@ for (const entry of demoEntries) {
   scene.add(mesh);
 }
 
-// ── Pivot for rotation ───────────────────────────────────────────────────────
-
-// We rotate the camera around the spiral's center by using a pivot group
-const pivot = new THREE.Group();
-pivot.position.set(0, 0, 0);
-scene.add(pivot);
-
 // ── Animation loop ───────────────────────────────────────────────────────────
 
-const ROTATION_SPEED = 0.15; // radians per second
+const ROTATION_SPEED = 0.15;
 let rotationAngle = 0;
 
 function animate() {
@@ -151,7 +148,6 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  spiralResolution.set(window.innerWidth * window.devicePixelRatio, window.innerHeight * window.devicePixelRatio);
 });
 
 // ── Auth UI ──────────────────────────────────────────────────────────────────

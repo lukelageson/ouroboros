@@ -1,40 +1,38 @@
 /**
- * emptyBeads.js — ghost beads for every unfilled calendar date.
+ * emptyBeads.js — Small white dots for every unfilled calendar date.
  *
- * Uses a single InstancedMesh for all empty positions (~14k instances).
- * Per-instance opacity is controlled via a custom shader attribute so that:
- *   - Plan View: all empty beads show at opacity 0.4
- *   - Perspective View: beads near the mouse ray glow, others hidden
+ * Uses THREE.Points (single draw call) for ~14k positions.
+ * sizeAttenuation: true — dots scale naturally with camera distance.
+ * Base size tuned so dots appear ~2-3px at typical perspective distance.
+ *
+ * Hover: raycasting against Points, hovered dot gets a highlight mesh overlay.
  */
 
 import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
-const EMPTY_R     = 0.3;
-const EMPTY_COLOR = 0xc8a870; // warm sand — visible against dark background
+const DOT_SIZE    = 4;       // base size — attenuates with distance
+const DOT_COLOR   = 0xffffff; // solid white
+const DOT_OPACITY = 0.5;     // base opacity for visible dots
+const HOVER_COLOR = 0xf5a623; // amber highlight
 const MS_PER_DAY  = 86400000;
-const REVEAL_DIST = 15;   // scene units — full opacity at 0, zero at this distance
-const ZOOM_GATE   = 60;   // camera must be closer than this to spiral surface
 
-let instancedMesh = null;
-let opacityAttr   = null;
-let instancePositions = []; // THREE.Vector3[] parallel to instance indices
-let instanceDates     = []; // ISO date strings parallel to instance indices
-let _hoveredInstanceId = -1; // instance currently under the cursor
-const _removedInstances = new Set(); // indices of removed (scale=0) instances
+let pointsMesh     = null;   // THREE.Points
+let positionsArray  = null;   // Float32Array of xyz
+let opacitiesArray  = null;   // Float32Array per-point opacity
+let instanceDates   = [];     // ISO date strings parallel to point indices
+let instancePositions = [];   // THREE.Vector3[] parallel to point indices
+let _hoveredIndex   = -1;
+let _highlightMesh  = null;   // small sphere shown on hover
 
-// Reusable temporaries for per-frame distance calc
-const _ray    = new THREE.Raycaster();
-const _mouse  = new THREE.Vector2();
-const _v      = new THREE.Vector3();
-const _proj   = new THREE.Vector3();
+const _removedIndices = new Set();
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Build the InstancedMesh for every calendar date not in filledEntryDates.
- * @param {Date} birthday       scene birthday (same one used by dateToPosition)
+ * Build the Points cloud for every calendar date not in filledEntryDates.
+ * @param {Date} birthday
  * @param {string[]} filledDates  ISO date strings of filled entries
  */
 export function initEmptyBeads(birthday, filledDates) {
@@ -45,12 +43,11 @@ export function initEmptyBeads(birthday, filledDates) {
   const bday  = new Date(birthday); bday.setHours(0, 0, 0, 0);
   const today = new Date();         today.setHours(0, 0, 0, 0);
 
-  // Collect unfilled positions
   instancePositions = [];
   instanceDates     = [];
   const cur = new Date(bday);
   while (cur <= today) {
-    // Skip Feb 29 entirely
+    // Skip Feb 29
     if (!(cur.getMonth() === 1 && cur.getDate() === 29)) {
       const key = cur.toISOString().slice(0, 10);
       if (!filled.has(key)) {
@@ -64,184 +61,155 @@ export function initEmptyBeads(birthday, filledDates) {
   const count = instancePositions.length;
   if (count === 0) return;
 
-  // Geometry + material
-  const geo = new THREE.SphereGeometry(EMPTY_R, 6, 4);
-  const mat = new THREE.MeshStandardMaterial({
-    color:             EMPTY_COLOR,
-    emissive:          0x7a5020,
-    emissiveIntensity: 0.5,
-    transparent:       true,
-    opacity:           1.0,
-    depthWrite:        true,
-    metalness:         0.15,
-    roughness:         0.65,
+  // Build geometry
+  positionsArray = new Float32Array(count * 3);
+  opacitiesArray = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const p = instancePositions[i];
+    positionsArray[i * 3]     = p.x;
+    positionsArray[i * 3 + 1] = p.y;
+    positionsArray[i * 3 + 2] = p.z;
+    opacitiesArray[i] = DOT_OPACITY;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positionsArray, 3));
+  geo.setAttribute('aOpacity', new THREE.BufferAttribute(opacitiesArray, 1));
+
+  // Custom shader material with size attenuation and per-point opacity
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      color: { value: new THREE.Color(DOT_COLOR) },
+      size:  { value: DOT_SIZE },
+    },
+    vertexShader: `
+      attribute float aOpacity;
+      varying float vOpacity;
+      uniform float size;
+      void main() {
+        vOpacity = aOpacity;
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        // Size attenuation: scale inversely with distance from camera
+        gl_PointSize = size * (300.0 / -mvPosition.z);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 color;
+      varying float vOpacity;
+      void main() {
+        vec2 center = gl_PointCoord - vec2(0.5);
+        if (length(center) > 0.5) discard;
+        gl_FragColor = vec4(color, vOpacity);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
   });
 
-  // Inject per-instance opacity into the shader
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <common>',
-      `#include <common>
-       attribute float instanceOpacity;
-       varying float vInstanceOpacity;`
-    );
-    shader.vertexShader = shader.vertexShader.replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-       vInstanceOpacity = instanceOpacity;`
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <common>',
-      `#include <common>
-       varying float vInstanceOpacity;`
-    );
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <premultiplied_alpha_fragment>',
-      `gl_FragColor.a *= vInstanceOpacity;
-       #include <premultiplied_alpha_fragment>`
-    );
-  };
+  pointsMesh = new THREE.Points(geo, mat);
+  pointsMesh.frustumCulled = false;
+  scene.add(pointsMesh);
 
-  instancedMesh = new THREE.InstancedMesh(geo, mat, count);
-
-  // Set instance transforms
-  const dummy = new THREE.Object3D();
-  for (let i = 0; i < count; i++) {
-    dummy.position.copy(instancePositions[i]);
-    dummy.updateMatrix();
-    instancedMesh.setMatrixAt(i, dummy.matrix);
-  }
-  instancedMesh.instanceMatrix.needsUpdate = true;
-
-  // Per-instance opacity attribute (starts at 0 — hidden)
-  const opacities = new Float32Array(count);
-  opacityAttr = new THREE.InstancedBufferAttribute(opacities, 1);
-  instancedMesh.geometry.setAttribute('instanceOpacity', opacityAttr);
-
-  instancedMesh.frustumCulled = false;
-  scene.add(instancedMesh);
+  // Highlight sphere (hidden until hover)
+  const hlGeo = new THREE.SphereGeometry(0.5, 12, 8);
+  const hlMat = new THREE.MeshStandardMaterial({
+    color:             HOVER_COLOR,
+    emissive:          HOVER_COLOR,
+    emissiveIntensity: 0.6,
+    transparent:       true,
+    opacity:           0.9,
+    metalness:         0.2,
+    roughness:         0.4,
+  });
+  _highlightMesh = new THREE.Mesh(hlGeo, hlMat);
+  _highlightMesh.visible = false;
+  scene.add(_highlightMesh);
 }
 
 /**
- * Update empty-bead visibility based on mouse position and view mode.
- *
- * @param {MouseEvent|null} mouseEvent   latest mousemove event (null = hide)
- * @param {THREE.Camera}    cam          active camera
- * @param {string}          viewMode     'plan' | 'perspective' | 'detail'
- * @param {Date|null}       ceilingDate  upper date bound (null = show all)
- * @param {Date|null}       floorDate    lower date bound for detail view
+ * Update dot visibility based on view mode and date range.
+ * Dots are always visible in all three views (subject to date culling).
  */
 export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode, ceilingDate = null, floorDate = null) {
-  if (!instancedMesh || !opacityAttr) return;
+  if (!pointsMesh || !opacitiesArray) return;
 
-  const arr   = opacityAttr.array;
-  const count = arr.length;
-
+  const count    = opacitiesArray.length;
   const ceilISO  = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : '9999-12-31';
   const floorISO = floorDate   ? floorDate.toISOString().slice(0, 10)   : '0000-01-01';
 
-  if (viewMode === 'plan') {
-    // Plan view: hide all empty beads
-    for (let i = 0; i < count; i++) arr[i] = 0;
-    opacityAttr.needsUpdate = true;
-    return;
-  }
-
   if (viewMode === 'detail') {
     for (let i = 0; i < count; i++) {
-      if (_removedInstances.has(i)) { arr[i] = 0; continue; }
+      if (_removedIndices.has(i)) { opacitiesArray[i] = 0; continue; }
       const dateISO = instanceDates[i];
-      arr[i] = (dateISO >= floorISO && dateISO <= ceilISO) ? 0.95 : 0;
+      opacitiesArray[i] = (dateISO >= floorISO && dateISO <= ceilISO) ? DOT_OPACITY : 0;
     }
-    opacityAttr.needsUpdate = true;
-    return;
-  }
-
-  if (viewMode !== 'perspective' || !mouseEvent) {
-    hideAllEmptyBeads();
-    return;
-  }
-
-  // Zoom gate: only show when camera is close to the spiral
-  const camDist = cam.position.length(); // distance from world origin
-  const spiralAxisDist = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2);
-  if (spiralAxisDist > ZOOM_GATE && camDist > ZOOM_GATE) {
-    hideAllEmptyBeads();
-    return;
-  }
-
-  // Perspective: zero all, then highlight exact hovered bead + ±3 index neighbors
-  for (let i = 0; i < count; i++) arr[i] = 0;
-  if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count) {
-    arr[_hoveredInstanceId] = 1.0;
-    for (let delta = 1; delta <= 3; delta++) {
-      const lo = _hoveredInstanceId - delta;
-      const hi = _hoveredInstanceId + delta;
-      if (lo >= 0)     arr[lo] = 0.5;
-      if (hi < count)  arr[hi] = 0.5;
+  } else if (viewMode === 'plan' || viewMode === 'perspective') {
+    for (let i = 0; i < count; i++) {
+      if (_removedIndices.has(i)) { opacitiesArray[i] = 0; continue; }
+      const dateISO = instanceDates[i];
+      opacitiesArray[i] = (dateISO <= ceilISO) ? DOT_OPACITY : 0;
     }
+  } else {
+    for (let i = 0; i < count; i++) opacitiesArray[i] = 0;
   }
 
-  opacityAttr.needsUpdate = true;
+  // Boost hovered dot
+  if (_hoveredIndex >= 0 && _hoveredIndex < count && opacitiesArray[_hoveredIndex] > 0) {
+    opacitiesArray[_hoveredIndex] = 1.0;
+  }
+
+  pointsMesh.geometry.attributes.aOpacity.needsUpdate = true;
 }
 
-/** Set all empty beads to fully transparent. */
+/** Hide all dots. */
 export function hideAllEmptyBeads() {
-  if (!opacityAttr) return;
-  const arr = opacityAttr.array;
-  for (let i = 0; i < arr.length; i++) arr[i] = 0;
-  opacityAttr.needsUpdate = true;
-}
-
-/** Scale a single instance (does nothing if it has been removed). */
-function _setInstanceScale(idx, scale) {
-  if (!instancedMesh || idx < 0 || _removedInstances.has(idx)) return;
-  const dummy = new THREE.Object3D();
-  instancedMesh.getMatrixAt(idx, dummy.matrix);
-  dummy.matrix.decompose(dummy.position, dummy.quaternion, dummy.scale);
-  dummy.scale.setScalar(scale);
-  dummy.updateMatrix();
-  instancedMesh.setMatrixAt(idx, dummy.matrix);
-  instancedMesh.instanceMatrix.needsUpdate = true;
+  if (!opacitiesArray) return;
+  for (let i = 0; i < opacitiesArray.length; i++) opacitiesArray[i] = 0;
+  if (pointsMesh) pointsMesh.geometry.attributes.aOpacity.needsUpdate = true;
 }
 
 /**
- * Set which instance is currently hovered so showEmptyBeadsNearMouse
- * can boost its opacity to maximum for a clear highlight.
- * Also scales the hovered instance up (like filled beads do).
+ * Set which point index is hovered. Shows highlight mesh at that position.
  */
 export function setHoveredEmptyBead(instanceId) {
-  if (instanceId === _hoveredInstanceId) return;
-  if (_hoveredInstanceId >= 0) _setInstanceScale(_hoveredInstanceId, 1.0);
-  _hoveredInstanceId = instanceId;
-  if (instanceId >= 0) _setInstanceScale(instanceId, 1.5);
+  if (instanceId === _hoveredIndex) return;
+  _hoveredIndex = instanceId;
+
+  if (_highlightMesh) {
+    if (instanceId >= 0 && instanceId < instancePositions.length && !_removedIndices.has(instanceId)) {
+      _highlightMesh.position.copy(instancePositions[instanceId]);
+      _highlightMesh.visible = true;
+    } else {
+      _highlightMesh.visible = false;
+    }
+  }
 }
 
-/** Get the InstancedMesh (for raycasting). */
+/** Get the Points mesh (for raycasting). */
 export function getEmptyBeadMesh() {
-  return instancedMesh;
+  return pointsMesh;
 }
 
-/** Get the ISO date string for a given instance index. */
+/** Get the ISO date string for a given point index. */
 export function getEmptyBeadDate(instanceId) {
   return instanceDates[instanceId] || null;
 }
 
 /**
- * Hide a single instance (set its scale to 0) after an entry was created for that date.
- * We don't actually remove it — just collapse the transform so it's invisible.
+ * Mark a point as removed (entry was created for that date).
  */
 export function removeEmptyBeadInstance(instanceId) {
-  if (!instancedMesh || instanceId < 0) return;
-  _removedInstances.add(instanceId);
-  const dummy = new THREE.Object3D();
-  dummy.position.set(0, 0, 0);
-  dummy.scale.set(0, 0, 0);
-  dummy.updateMatrix();
-  instancedMesh.setMatrixAt(instanceId, dummy.matrix);
-  instancedMesh.instanceMatrix.needsUpdate = true;
-  if (opacityAttr) {
-    opacityAttr.array[instanceId] = 0;
-    opacityAttr.needsUpdate = true;
+  if (!pointsMesh || instanceId < 0) return;
+  _removedIndices.add(instanceId);
+  if (opacitiesArray) {
+    opacitiesArray[instanceId] = 0;
+    pointsMesh.geometry.attributes.aOpacity.needsUpdate = true;
+  }
+  if (_hoveredIndex === instanceId) {
+    _hoveredIndex = -1;
+    if (_highlightMesh) _highlightMesh.visible = false;
   }
 }
