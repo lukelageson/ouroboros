@@ -14,6 +14,8 @@ const PLAN_FOV      = THREE.MathUtils.radToDeg(
 const DETAIL_ENTRY_CROP_FRACTION = 0.5;
 // Min crop = 5% of full frame (20× zoom)
 const DETAIL_MIN_CROP_FRACTION   = 0.05;
+// Max crop = 50% of full frame (2× zoom) — never see more than half the spiral
+const DETAIL_MAX_CROP_FRACTION   = 0.5;
 
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
@@ -64,8 +66,8 @@ const crop = {
 function _clampCrop() {
   const fullW = window.innerWidth;
   const fullH = window.innerHeight;
-  crop.cropW = Math.max(fullW * DETAIL_MIN_CROP_FRACTION, Math.min(crop.cropW, fullW));
-  crop.cropH = Math.max(fullH * DETAIL_MIN_CROP_FRACTION, Math.min(crop.cropH, fullH));
+  crop.cropW = Math.max(fullW * DETAIL_MIN_CROP_FRACTION, Math.min(crop.cropW, fullW * DETAIL_MAX_CROP_FRACTION));
+  crop.cropH = Math.max(fullH * DETAIL_MIN_CROP_FRACTION, Math.min(crop.cropH, fullH * DETAIL_MAX_CROP_FRACTION));
   crop.offsetX = Math.max(0, Math.min(crop.offsetX, fullW - crop.cropW));
   crop.offsetY = Math.max(0, Math.min(crop.offsetY, fullH - crop.cropH));
 }
@@ -240,10 +242,14 @@ export function applyDetailZoom(delta, pivotX, pivotY) {
 
   // Scale factor: positive delta = zoom out (natural scroll-down = zoom out)
   const factor   = 1 + delta;
-  const newCropW = crop.cropW * factor;
-  const newCropH = crop.cropH * factor;
 
-  // Adjust offset so the pivot point stays fixed
+  // Pre-clamp crop size BEFORE computing offset — prevents center drift at zoom limits
+  const newCropW = Math.max(fullW * DETAIL_MIN_CROP_FRACTION,
+                   Math.min(crop.cropW * factor, fullW * DETAIL_MAX_CROP_FRACTION));
+  const newCropH = Math.max(fullH * DETAIL_MIN_CROP_FRACTION,
+                   Math.min(crop.cropH * factor, fullH * DETAIL_MAX_CROP_FRACTION));
+
+  // Adjust offset so the pivot point stays fixed (ratio is 1.0 when size didn't change)
   const newOffX  = pX - (pX - crop.offsetX) * (newCropW / crop.cropW);
   const newOffY  = pY - (pY - crop.offsetY) * (newCropH / crop.cropH);
 

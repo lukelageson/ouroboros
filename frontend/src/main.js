@@ -37,7 +37,7 @@ import { initBeads, addBead, getAllBeadMeshes } from './three/beads.js';
 import {
   initEmptyBeads, showEmptyBeadsNearMouse,
   getEmptyBeadMesh, getEmptyBeadDate, removeEmptyBeadInstance,
-  setHoveredEmptyBead,
+  setHoveredEmptyBead, isEmptyBeadVisible,
 } from './three/emptyBeads.js';
 import { toggleColorMode, initColorModeToggle } from './three/colorMode.js';
 import { setPanelViewMode }                     from './three/panelManager.js';
@@ -251,7 +251,7 @@ canvas.addEventListener('click', (e) => {
   if (emptyMesh) {
     clickRaycaster.params.Points.threshold = 0.8;
     const emptyHits = clickRaycaster.intersectObject(emptyMesh, false);
-    if (emptyHits.length) {
+    if (emptyHits.length && isEmptyBeadVisible(emptyHits[0].index)) {
       const instId = emptyHits[0].index;
       if (mode === 'perspective') {
         const camDist = Math.sqrt(activeCam.position.x ** 2 + activeCam.position.z ** 2);
@@ -431,7 +431,7 @@ registerFrameCallback((cam) => {
   if (emptyMesh && !_hoveredBeadMesh) {
     hoverRaycaster.params.Points.threshold = 0.8;
     const emptyHits = hoverRaycaster.intersectObject(emptyMesh, false);
-    if (emptyHits.length) newHoveredEmptyId = emptyHits[0].index;
+    if (emptyHits.length && isEmptyBeadVisible(emptyHits[0].index)) newHoveredEmptyId = emptyHits[0].index;
   }
   setHoveredEmptyBead(newHoveredEmptyId);
 });

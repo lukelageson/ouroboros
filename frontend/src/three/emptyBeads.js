@@ -12,9 +12,10 @@ import * as THREE from 'three';
 import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 
-const DOT_SIZE    = 4;       // base size — attenuates with distance
-const DOT_COLOR   = 0xffffff; // solid white
-const DOT_OPACITY = 0.5;     // base opacity for visible dots
+const DOT_SIZE       = 4;       // base size — attenuates with distance
+const DOT_COLOR      = 0xffffff; // solid white
+const DOT_OPACITY    = 0.5;     // base opacity for visible dots
+const DOT_PLAN_OPACITY = 0.2;  // dimmer in plan view so filled beads stand out
 const HOVER_COLOR = 0xf5a623; // amber highlight
 const MS_PER_DAY  = 86400000;
 
@@ -90,8 +91,10 @@ export function initEmptyBeads(birthday, filledDates) {
       void main() {
         vOpacity = aOpacity;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        // Size attenuation: scale inversely with distance from camera
-        gl_PointSize = size * (300.0 / -mvPosition.z);
+        // Size attenuation: scale inversely with distance
+        // 150.0 factor gives ~3px at mid-range; clamp prevents ballooning up close
+        // and keeps dots visible (0.8px min) when zoomed out
+        gl_PointSize = clamp(size * (150.0 / -mvPosition.z), 0.8, 5.0);
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -146,7 +149,13 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode, ceilingDate =
       const dateISO = instanceDates[i];
       opacitiesArray[i] = (dateISO >= floorISO && dateISO <= ceilISO) ? DOT_OPACITY : 0;
     }
-  } else if (viewMode === 'plan' || viewMode === 'perspective') {
+  } else if (viewMode === 'plan') {
+    for (let i = 0; i < count; i++) {
+      if (_removedIndices.has(i)) { opacitiesArray[i] = 0; continue; }
+      const dateISO = instanceDates[i];
+      opacitiesArray[i] = (dateISO <= ceilISO) ? DOT_PLAN_OPACITY : 0;
+    }
+  } else if (viewMode === 'perspective') {
     for (let i = 0; i < count; i++) {
       if (_removedIndices.has(i)) { opacitiesArray[i] = 0; continue; }
       const dateISO = instanceDates[i];
@@ -186,6 +195,12 @@ export function setHoveredEmptyBead(instanceId) {
       _highlightMesh.visible = false;
     }
   }
+}
+
+/** Check if a given point index is currently visible (opacity > 0). */
+export function isEmptyBeadVisible(index) {
+  if (!opacitiesArray || index < 0 || index >= opacitiesArray.length) return false;
+  return opacitiesArray[index] > 0;
 }
 
 /** Get the Points mesh (for raycasting). */

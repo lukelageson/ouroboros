@@ -139,11 +139,16 @@ export function buildRibbon(birthday, today) {
       group.add(outerLine);
       group.add(meshFill);
 
+      // Precompute midpoint Y for perspective-mode proximity culling
+      const midMs = (monthStart.getTime() + monthEnd.getTime()) / 2;
+      const midYearsElapsed = (midMs - birthday.getTime()) / (DAYS_IN_YEAR * MS_PER_DAY);
+      const midY = midYearsElapsed * 8;
+
       arcSegments.push({
         innerLine, outerLine, meshFill,
         startDate: new Date(monthStart),
         endDate:   new Date(monthEnd),
-        year, month,
+        year, month, midY,
       });
     }
 
@@ -306,11 +311,20 @@ export function updateRibbonLabels(
         if (seg.meshFill) seg.meshFill.visible = ribbonVisible && vis;
       }
     } else {
-      // Perspective mode: apply ZOOM_THRESHOLD and angular culling
+      // Perspective mode: disk-shaped culling volume around camera
+      // Tight Y range (~2.5 years) + narrow angular cone = only nearby segments
       const camAngle = Math.atan2(camera.position.z, camera.position.x);
       const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
+      const camY     = camera.position.y;
       const zoomed   = camHDist < ZOOM_THRESHOLD;
-      const ceil2    = ceilingDate.toISOString().slice(0, 10);
+
+      // Disk parameters scale with zoom: tighter when farther, wider when closer
+      const zoomFactor = zoomed ? Math.max(0.1, camHDist / ZOOM_THRESHOLD) : 1;
+      const yRadius    = 20 / zoomFactor;  // ±20 units at threshold, wider when closer
+      const angleCone  = (Math.PI / 3) / zoomFactor; // ±60° at threshold, wider when closer
+      // Cap maximums so it doesn't get too wide
+      const yMax       = Math.min(yRadius, 40);
+      const angleMax   = Math.min(angleCone, Math.PI / 2);
 
       for (const seg of arcSegments) {
         if (!ribbonVisible || !zoomed) {
@@ -325,12 +339,19 @@ export function updateRibbonLabels(
           if (seg.meshFill) seg.meshFill.visible = false;
           continue;
         }
-        // Angular culling: segment midpoint angle
+        // Y-proximity: tight disk — only show segments near camera's Y
+        if (Math.abs(seg.midY - camY) > yMax) {
+          seg.innerLine.visible = false;
+          seg.outerLine.visible = false;
+          if (seg.meshFill) seg.meshFill.visible = false;
+          continue;
+        }
+        // Angular culling: narrow cone in front of camera
         const midAngle = dateToAngle(new Date((seg.startDate.getTime() + seg.endDate.getTime()) / 2));
         let diff = midAngle - camAngle;
         if (diff >  Math.PI) diff -= 2 * Math.PI;
         if (diff < -Math.PI) diff += 2 * Math.PI;
-        const inFront = Math.abs(diff) < Math.PI / 2;
+        const inFront = Math.abs(diff) < angleMax;
         seg.innerLine.visible = inFront;
         seg.outerLine.visible = inFront;
         if (seg.meshFill) seg.meshFill.visible = inFront;
@@ -382,33 +403,37 @@ export function updateRibbonLabels(
     }
 
   } else {
-    // Perspective mode: angular culling + section cut
+    // Perspective mode: disk-shaped culling matching arc segment logic
     const camAngle = Math.atan2(camera.position.z, camera.position.x);
     const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
     const camY     = camera.position.y;
     const zoomed   = camHDist < ZOOM_THRESHOLD;
     const ceil     = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : null;
 
+    const zoomFactor = zoomed ? Math.max(0.1, camHDist / ZOOM_THRESHOLD) : 1;
+    const yMax       = Math.min(20 / zoomFactor, 40);
+    const angleMax   = Math.min((Math.PI / 3) / zoomFactor, Math.PI / 2);
+
     for (const label of labels) {
       if (!ribbonVisible || !zoomed) { label.visible = false; continue; }
       const lDate = label.userData.date?.toISOString().slice(0, 10);
       if (ceil && lDate && lDate > ceil) { label.visible = false; continue; }
-      if (Math.abs(label.userData.y - camY) > 80) { label.visible = false; continue; }
+      if (Math.abs(label.userData.y - camY) > yMax) { label.visible = false; continue; }
       let diff = label.userData.angle - camAngle;
       if (diff >  Math.PI) diff -= 2 * Math.PI;
       if (diff < -Math.PI) diff += 2 * Math.PI;
-      label.visible = Math.abs(diff) < Math.PI / 2;
+      label.visible = Math.abs(diff) < angleMax;
     }
 
     for (const seg of dividerObjects) {
       if (!ribbonVisible || !zoomed) { seg.visible = false; continue; }
       const sDate = seg.userData.date?.toISOString().slice(0, 10);
       if (ceil && sDate && sDate > ceil) { seg.visible = false; continue; }
-      if (Math.abs(seg.userData.y - camY) > 80) { seg.visible = false; continue; }
+      if (Math.abs(seg.userData.y - camY) > yMax) { seg.visible = false; continue; }
       let diff = seg.userData.angle - camAngle;
       if (diff >  Math.PI) diff -= 2 * Math.PI;
       if (diff < -Math.PI) diff += 2 * Math.PI;
-      seg.visible = Math.abs(diff) < Math.PI / 2;
+      seg.visible = Math.abs(diff) < angleMax;
     }
   }
 }
