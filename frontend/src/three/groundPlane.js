@@ -39,7 +39,7 @@ const RippleReflectorShader = {
       // Ripple distortion based on world position
       float ripple1 = sin(vWorldPos.x * 0.06 + time * 0.8) * cos(vWorldPos.z * 0.04 + time * 0.6);
       float ripple2 = sin(vWorldPos.x * 0.10 - time * 0.5) * cos(vWorldPos.z * 0.08 + time * 0.9);
-      vec2 distortion = vec2(ripple1 + ripple2, ripple1 - ripple2) * 0.004;
+      vec2 distortion = vec2(ripple1 + ripple2, ripple1 - ripple2) * 0.002;
 
       // Multi-tap blur (5 samples)
       float blurSize = 0.002;

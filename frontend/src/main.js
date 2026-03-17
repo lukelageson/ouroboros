@@ -8,16 +8,18 @@ import {
   updateRibbonLabels, updateRibbonResolution,
 } from './three/ribbon.js';
 import {
-  updateSpiralVisibility, updateSpiralResolution,
+  updateSpiralVisibility, updateSpiralResolution, updateSpiralLineWidth,
 } from './three/spiralGeometry.js';
 import {
   setViewMode, advanceTransition,
   isPlanMode, isDetailMode, getCurrentMode,
   setPlanTargetY,
-  applyDetailZoom, applyDetailPan,
+  applyDetailZoom,
+  worldToDetailScreen, getDetailCropCenterScreen, screenToWorldXZ,
+  centerDetailViewOnScreen, instantCenterDetailViewOnScreen,
   onResizeDetailView,
 } from './three/cameraController.js';
-import { dateToPosition }       from './three/spiralMath.js';
+import { dateToPosition, angleToDate } from './three/spiralMath.js';
 import {
   initSectionCut,
   showSectionCutSlider,
@@ -45,6 +47,7 @@ import {
 } from './three/popups/createPanel.js';
 import {
   initTodaysBubble, dismissTodaysBubble,
+  getTodayBubbleMesh, getTodayBubblePos,
 } from './three/todaysBubble.js';
 import {
   initRingStack, expandStack, collapseStack, updateRingStack,
@@ -66,6 +69,7 @@ import {
 import {
   initRadialDateLine, updateRadialDateLine,
   getSelectedDayOfYear, setRadialDateLineVisible, onDateLineChange,
+  setLoadedEntries,
 } from './three/radialDateLine.js';
 import {
   initEntryColumn, updateEntryColumn, showEntryColumn, hideEntryColumn,
@@ -115,7 +119,15 @@ initViewCube(webgl, camera, controls, (mode) => {
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'detail') {
     setSectionCutY(spiralTopY); // reset ceiling to today on entry
-    setViewMode('detail', spiralTopY, { todayPos: todayPos });
+    // Center detail view on most recent entry bead (fallback to today)
+    let detailFocusPos = todayPos;
+    if (loadedEntries && loadedEntries.length > 0) {
+      const latest = loadedEntries.reduce((a, b) =>
+        new Date(a.entry_date) > new Date(b.entry_date) ? a : b
+      );
+      detailFocusPos = dateToPosition(new Date(latest.entry_date), birthday);
+    }
+    setViewMode('detail', spiralTopY, { todayPos: detailFocusPos });
   } else {
     setViewMode(mode, effectiveTop);
   }
@@ -137,15 +149,13 @@ registerFrameCallback(() => {
   // Plan view: track section cut live
   if (mode === 'plan') setPlanTargetY(getSectionCutY());
 
-  // Detail view: year indicator + entry labels
+  // Detail view: entry labels
   if (mode === 'detail') {
-    _updateDetailYearIndicator(controls.target.y);
     if (ground) ground.visible = false;
 
     // Entry text labels at high zoom
     updateDetailLabels(loadedEntries, birthday, camera, controls.target.y, true);
   } else {
-    _hideDetailYearIndicator();
     clearDetailLabels();
     if (ground) ground.visible = (mode === 'perspective');
   }
@@ -179,6 +189,10 @@ registerFrameCallback((cam) => {
 
   // Spiral segment visibility (date-based + plan-mode opacity fade)
   updateSpiralVisibility(spiralSegments, ceilingDate, floorDate, isPlanMode());
+
+  // Spiral linewidth: scale with zoom in perspective, thin in plan/detail
+  const camHDist = Math.sqrt(cam.position.x ** 2 + cam.position.z ** 2);
+  updateSpiralLineWidth(spiralSegments, camHDist, mode);
 
   // Ribbon: arc segments + labels + dividers
   updateRibbonLabels(
@@ -232,9 +246,13 @@ canvas.addEventListener('mousedown', (e) => {
   clickDownPos = { x: e.clientX, y: e.clientY };
 
   if (getCurrentMode() === 'detail' && !isCreatePanelOpen()) {
-    _isDetailPanning = true;
-    _panLastX = e.clientX;
-    _panLastY = e.clientY;
+    _isDetailPanning  = true;
+    _panDownX         = e.clientX;
+    _panDownY         = e.clientY;
+    _panStartCenter   = getDetailCropCenterScreen();
+    // Derive the current focus date from the crop center's world angle
+    const { x: wx, z: wz } = screenToWorldXZ(_panStartCenter.x, _panStartCenter.y);
+    _panFocusDate = angleToDate(Math.atan2(wz, wx), getSectionCutDate());
   }
 });
 
@@ -288,7 +306,30 @@ canvas.addEventListener('click', (e) => {
     }
   }
 
-  // ── 2. Check empty beads (InstancedMesh) ─────────────────────────────
+  // ── 2. Check today's bubble ───────────────────────────────────────────
+  const todayMesh = getTodayBubbleMesh();
+  if (todayMesh) {
+    const todayHits = clickRaycaster.intersectObject(todayMesh, false);
+    if (todayHits.length) {
+      const todayISO = new Date().toISOString().slice(0, 10);
+      closeReadOverlay();
+      openCreatePanel(todayISO, getTodayBubblePos(), async (data) => {
+        try {
+          const newEntry = await api.createEntry(data);
+          loadedEntries.push(newEntry);
+          addBead(newEntry, birthday, true);
+          updateProgress(loadedEntries);
+          dismissTodaysBubble();
+          closeCreatePanel();
+        } catch (err) {
+          console.error('Failed to create entry:', err);
+        }
+      });
+      return;
+    }
+  }
+
+  // ── 3. Check empty beads (InstancedMesh) ─────────────────────────────
   const emptyMesh = getEmptyBeadMesh();
   if (emptyMesh) {
     const emptyHits = clickRaycaster.intersectObject(emptyMesh, false);
@@ -329,48 +370,19 @@ canvas.addEventListener('click', (e) => {
   }
 });
 
-// ── Detail-view year indicator ───────────────────────────────────────────────
-let _yearIndicatorEl = null;
-
-function _getOrCreateYearIndicator() {
-  if (_yearIndicatorEl) return _yearIndicatorEl;
-  _yearIndicatorEl = document.createElement('div');
-  Object.assign(_yearIndicatorEl.style, {
-    position:      'fixed',
-    bottom:        '24px',
-    left:          '50%',
-    transform:     'translateX(-50%)',
-    zIndex:        '100',
-    fontFamily:    'monospace',
-    fontSize:      '13px',
-    letterSpacing: '3px',
-    color:         'rgba(255,245,230,0.7)',
-    pointerEvents: 'none',
-    display:       'none',
-  });
-  document.getElementById('app').appendChild(_yearIndicatorEl);
-  return _yearIndicatorEl;
-}
-
-function _updateDetailYearIndicator(targetY) {
-  const el = _getOrCreateYearIndicator();
-  const yearsElapsed = targetY / 8;
-  const DAYS_IN_YEAR = 365.25;
-  const MS_PER_DAY   = 86400000;
-  const d = new Date(birthday.getTime() + yearsElapsed * DAYS_IN_YEAR * MS_PER_DAY);
-  const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  el.textContent = `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
-  el.style.display = 'block';
-}
-
-function _hideDetailYearIndicator() {
-  if (_yearIndicatorEl) _yearIndicatorEl.style.display = 'none';
-}
-
 // ── Detail-view crop pan state ────────────────────────────────────────────────
-let _isDetailPanning = false;
-let _panLastX = 0;
-let _panLastY = 0;
+
+let _isDetailPanning  = false;
+let _panDownX         = 0;
+let _panDownY         = 0;
+let _panStartCenter   = null; // { x, y } screen pos of focused point at drag start
+let _panFocusDate     = null; // current continuous focus date during drag
+
+/**
+ * Snap the detail-view crop to the bead closest to where the pan gesture aimed.
+ * @param {number} totalDx  total horizontal drag (positive = dragged right)
+ * @param {number} totalDy  total vertical drag (positive = dragged down)
+ */
 
 /** Helper: open the create panel for a given empty-bead instance. */
 function _openCreateForInstance(instanceId) {
@@ -465,17 +477,31 @@ let lastMouseEvent = null;
 
 window.addEventListener('mousemove', (e) => {
   lastMouseEvent = e;
-  if (_isDetailPanning) {
-    const dx = e.clientX - _panLastX;
-    const dy = e.clientY - _panLastY;
-    _panLastX = e.clientX;
-    _panLastY = e.clientY;
-    applyDetailPan(dx, dy);
+  if (_isDetailPanning && _panStartCenter) {
+    // Virtual target: where the focus would be after a free pan
+    const totalDx  = e.clientX - _panDownX;
+    const totalDy  = e.clientY - _panDownY;
+    const targetCX = _panStartCenter.x - totalDx;
+    const targetCY = _panStartCenter.y - totalDy;
+
+    // Unproject to world XZ, derive angle, convert to a continuous date
+    const { x: wx, z: wz } = screenToWorldXZ(targetCX, targetCY);
+    const angle   = Math.atan2(wz, wx);
+    const focusDate = _panFocusDate || getSectionCutDate();
+    const newDate = angleToDate(angle, focusDate);
+    if (newDate) {
+      _panFocusDate = newDate;
+      const pos = dateToPosition(newDate, birthday);
+      const { x: sx, y: sy } = worldToDetailScreen(pos);
+      instantCenterDetailViewOnScreen(sx, sy);
+    }
   }
 });
 
 window.addEventListener('mouseup', () => {
   _isDetailPanning = false;
+  _panStartCenter  = null;
+  _panFocusDate    = null;
 });
 
 registerFrameCallback((cam) => {
@@ -554,6 +580,12 @@ registerFrameCallback((cam) => {
       newHovered.material.emissiveIntensity = 0.85;
       newHovered.scale.setScalar(1.2);
       _hoveredBeadMesh = newHovered;
+
+      // In detail view, show the entry as a hover tooltip
+      if (getCurrentMode() === 'detail') {
+        const entry = loadedEntries.find(en => en.id === newHovered.userData.entryId);
+        if (entry) openReadOverlay(entry, newHovered.position);
+      }
     }
     // Keep screen projection up to date (camera may move)
     _hoveredBeadScreenPos = _worldToScreen(_hoveredBeadMesh.position);
@@ -567,6 +599,7 @@ registerFrameCallback((cam) => {
       _hoveredBeadMesh.scale.setScalar(1.0);
       _hoveredBeadMesh = null;
       _hoveredBeadScreenPos = null;
+      if (getCurrentMode() === 'detail') closeReadOverlay();
     }
   }
 
@@ -663,9 +696,10 @@ function _deriveAnalysisRole(analysis, entry) {
 canvas.addEventListener('wheel', (e) => {
   if (getCurrentMode() !== 'detail') return;
   e.preventDefault();
-  // delta > 0 = scroll down = zoom in (shrink crop)
+  // delta > 0 = scroll down = zoom in (shrink crop); always pivot on crop center (bead)
   const zoomDelta = e.deltaY / 500;
-  applyDetailZoom(zoomDelta, e.clientX, e.clientY);
+  const cropCenter = getDetailCropCenterScreen();
+  applyDetailZoom(zoomDelta, cropCenter.x, cropCenter.y);
 }, { passive: false });
 
 // ── Keyboard: ribbon toggle only ────────────────────────────────────────────
@@ -682,6 +716,7 @@ let loadedEntries = [];
 
 async function loadEntries() {
   loadedEntries = await api.getEntries();
+  setLoadedEntries(loadedEntries);
   initBeads(loadedEntries, birthday);
 
   // Empty beads for all unfilled dates

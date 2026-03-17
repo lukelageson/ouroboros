@@ -50,10 +50,13 @@ export function initEmptyBeads(birthday, filledDates) {
   instanceDates     = [];
   const cur = new Date(bday);
   while (cur <= today) {
-    const key = cur.toISOString().slice(0, 10);
-    if (!filled.has(key)) {
-      instancePositions.push(dateToPosition(new Date(cur), bday));
-      instanceDates.push(key);
+    // Skip Feb 29 entirely
+    if (!(cur.getMonth() === 1 && cur.getDate() === 29)) {
+      const key = cur.toISOString().slice(0, 10);
+      if (!filled.has(key)) {
+        instancePositions.push(dateToPosition(new Date(cur), bday));
+        instanceDates.push(key);
+      }
     }
     cur.setTime(cur.getTime() + MS_PER_DAY);
   }
@@ -69,7 +72,7 @@ export function initEmptyBeads(birthday, filledDates) {
     emissiveIntensity: 0.5,
     transparent:       true,
     opacity:           1.0,
-    depthWrite:        false,
+    depthWrite:        true,
     metalness:         0.15,
     roughness:         0.65,
   });
@@ -138,30 +141,17 @@ export function showEmptyBeadsNearMouse(mouseEvent, cam, viewMode, ceilingDate =
   const floorISO = floorDate   ? floorDate.toISOString().slice(0, 10)   : '0000-01-01';
 
   if (viewMode === 'plan') {
-    // Plan view: all empties at constant opacity; hide those after the ceiling date
-    for (let i = 0; i < count; i++) {
-      arr[i] = (_removedInstances.has(i) || instanceDates[i] > ceilISO) ? 0 : 0.82;
-    }
-    if (_hoveredInstanceId >= 0 && _hoveredInstanceId < count &&
-        !_removedInstances.has(_hoveredInstanceId) &&
-        instanceDates[_hoveredInstanceId] <= ceilISO) {
-      arr[_hoveredInstanceId] = 1.0;
-    }
+    // Plan view: hide all empty beads
+    for (let i = 0; i < count; i++) arr[i] = 0;
     opacityAttr.needsUpdate = true;
     return;
   }
 
   if (viewMode === 'detail') {
-    const camAngle = Math.atan2(cam.position.z, cam.position.x);
     for (let i = 0; i < count; i++) {
       if (_removedInstances.has(i)) { arr[i] = 0; continue; }
       const dateISO = instanceDates[i];
-      if (dateISO < floorISO || dateISO > ceilISO) { arr[i] = 0; continue; }
-      const p = instancePositions[i];
-      let angDiff = Math.atan2(p.z, p.x) - camAngle;
-      if (angDiff >  Math.PI) angDiff -= 2 * Math.PI;
-      if (angDiff < -Math.PI) angDiff += 2 * Math.PI;
-      arr[i] = Math.abs(angDiff) < 1.0 ? 0.88 : 0;
+      arr[i] = (dateISO >= floorISO && dateISO <= ceilISO) ? 0.95 : 0;
     }
     opacityAttr.needsUpdate = true;
     return;

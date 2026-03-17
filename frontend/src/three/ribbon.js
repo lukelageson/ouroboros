@@ -5,7 +5,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { dateToAngle } from './spiralMath.js';
 
-const DAYS_IN_YEAR  = 365.25;
+const DAYS_IN_YEAR  = 365;
 const MS_PER_DAY    = 86400000;
 const RIBBON_RADIUS = 42;
 const RIBBON_WIDTH  = 4.5;
@@ -41,8 +41,8 @@ function ribbonPosition(date, birthday) {
  * Build the ribbon as monthly arc Line2 segments, plus dividers and CSS3D labels.
  *
  * Returns { group, arcSegments, dividerObjects, labels }
- *   group        — THREE.Group containing all inner/outer arc lines
- *   arcSegments  — Array<{ innerLine, outerLine, startDate, endDate, year, month }>
+ *   group        — THREE.Group containing all inner/outer arc lines + mesh fills
+ *   arcSegments  — Array<{ innerLine, outerLine, meshFill, startDate, endDate, year, month }>
  *   dividerObjects — Array of Line2 per month boundary
  *   labels       — Array of CSS3DObject (month abbreviations + year numbers)
  */
@@ -59,11 +59,20 @@ export function buildRibbon(birthday, today) {
 
   // Shared arc material (cloned per segment so opacity can vary if needed)
   const arcMatBase = new LineMaterial({
-    color:       0xfff5e6,
+    color:       0xffe4b5,
     linewidth:   1,
     transparent: true,
     opacity:     0.12,
     resolution:  res,
+  });
+
+  // Mesh fill material (shared, semi-transparent)
+  const fillMat = new THREE.MeshBasicMaterial({
+    color:       0xffe4b5,
+    transparent: true,
+    opacity:     0.06,
+    side:        THREE.DoubleSide,
+    depthWrite:  false,
   });
 
   // Monthly arc segments — start from birthday's month
@@ -81,6 +90,8 @@ export function buildRibbon(birthday, today) {
       const N = 20;
       const innerPositions = [];
       const outerPositions = [];
+      const innerPts = [];
+      const outerPts = [];
 
       for (let i = 0; i <= N; i++) {
         const frac  = i / N;
@@ -88,8 +99,14 @@ export function buildRibbon(birthday, today) {
         const angle = dateToAngle(date);
         const ye    = (date - b) / (DAYS_IN_YEAR * MS_PER_DAY);
         const y     = ye * 8;
-        innerPositions.push(rInner * Math.cos(angle), y, rInner * Math.sin(angle));
-        outerPositions.push(rOuter * Math.cos(angle), y, rOuter * Math.sin(angle));
+        const ix = rInner * Math.cos(angle);
+        const iz = rInner * Math.sin(angle);
+        const ox = rOuter * Math.cos(angle);
+        const oz = rOuter * Math.sin(angle);
+        innerPositions.push(ix, y, iz);
+        outerPositions.push(ox, y, oz);
+        innerPts.push(new THREE.Vector3(ix, y, iz));
+        outerPts.push(new THREE.Vector3(ox, y, oz));
       }
 
       const innerGeo = new LineGeometry(); innerGeo.setPositions(innerPositions);
@@ -100,11 +117,30 @@ export function buildRibbon(birthday, today) {
       innerLine.computeLineDistances();
       outerLine.computeLineDistances();
 
+      // Triangle strip mesh fill between inner and outer arcs
+      const fillGeo = new THREE.BufferGeometry();
+      const verts = [];
+      for (let i = 0; i <= N; i++) {
+        verts.push(innerPts[i].x, innerPts[i].y, innerPts[i].z);
+        verts.push(outerPts[i].x, outerPts[i].y, outerPts[i].z);
+      }
+      const indices = [];
+      for (let i = 0; i < N; i++) {
+        const a = i * 2, b2 = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
+        indices.push(a, b2, c, b2, d, c);
+      }
+      fillGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      fillGeo.setIndex(indices);
+      fillGeo.computeVertexNormals();
+
+      const meshFill = new THREE.Mesh(fillGeo, fillMat.clone());
+
       group.add(innerLine);
       group.add(outerLine);
+      group.add(meshFill);
 
       arcSegments.push({
-        innerLine, outerLine,
+        innerLine, outerLine, meshFill,
         startDate: new Date(monthStart),
         endDate:   new Date(monthEnd),
         year, month,
@@ -120,7 +156,7 @@ export function buildRibbon(birthday, today) {
   const dividerObjects = [];
 
   const dividerMaterial = new LineMaterial({
-    color:       0xfff5e6,
+    color:       0xffe4b5,
     transparent: true,
     opacity:     0.15,
     linewidth:   3,
@@ -181,9 +217,9 @@ export function buildRibbon(birthday, today) {
       return lbl;
     }
 
-    labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,245,230,0.12)', false));
+    labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,228,181,0.12)', false));
     if (isYearBound) {
-      labels.push(makeLabel(String(year), '13px', 'rgba(255,245,230,0.9)', true));
+      labels.push(makeLabel(String(year), '13px', 'rgba(255,228,181,0.9)', true));
     }
 
     divCursor = nextDivCursor;
@@ -211,11 +247,9 @@ export function updateRibbonLabels(
   arcSegments = null, ceilingDate = null, floorDate = null
 ) {
   // Support both old API (ribbonMesh with uniforms) and new API (arcSegments).
-  // In Change 2 ribbonOrMesh is the THREE.Group — we skip uniform updates.
   const hasUniforms = ribbonOrMesh?.material?.uniforms;
 
   if (hasUniforms) {
-    // Legacy path (should not be reached after Change 2 wires new API)
     const u = ribbonOrMesh.material.uniforms;
     if (planMode || detailMode) {
       u.cameraY.value      = clipY - 4;
@@ -236,26 +270,94 @@ export function updateRibbonLabels(
   // ── Arc segment visibility (new path) ──────────────────────────────────
   if (arcSegments && ceilingDate) {
     const ceil  = ceilingDate;
-    const floor = floorDate || null;
-    for (const seg of arcSegments) {
-      let vis = seg.endDate <= ceil;
-      if (floor) vis = vis && seg.startDate >= floor;
-      seg.innerLine.visible = ribbonVisible && vis;
-      seg.outerLine.visible = ribbonVisible && vis;
+
+    if (planMode) {
+      // Plan mode: only show 1 year back from ceiling, and cull by ceiling date angle
+      const floorDate1yr = new Date(ceil);
+      floorDate1yr.setFullYear(floorDate1yr.getFullYear() - 1);
+
+      const refAngle = dateToAngle(ceil);
+
+      for (const seg of arcSegments) {
+        const inRange = seg.endDate <= ceil && seg.endDate > floorDate1yr;
+        if (!inRange) {
+          seg.innerLine.visible = false;
+          seg.outerLine.visible = false;
+          if (seg.meshFill) seg.meshFill.visible = false;
+          continue;
+        }
+        // Angular culling: only show segments within ±90° of the ceiling date's angle
+        const midAngle = dateToAngle(new Date((seg.startDate.getTime() + seg.endDate.getTime()) / 2));
+        let diff = midAngle - refAngle;
+        if (diff >  Math.PI) diff -= 2 * Math.PI;
+        if (diff < -Math.PI) diff += 2 * Math.PI;
+        const inFront = Math.abs(diff) < Math.PI / 2;
+        seg.innerLine.visible = ribbonVisible && inFront;
+        seg.outerLine.visible = ribbonVisible && inFront;
+        if (seg.meshFill) seg.meshFill.visible = ribbonVisible && inFront;
+      }
+    } else if (detailMode) {
+      const floor = floorDate || null;
+      for (const seg of arcSegments) {
+        let vis = seg.endDate <= ceil;
+        if (floor) vis = vis && seg.startDate >= floor;
+        seg.innerLine.visible = ribbonVisible && vis;
+        seg.outerLine.visible = ribbonVisible && vis;
+        if (seg.meshFill) seg.meshFill.visible = ribbonVisible && vis;
+      }
+    } else {
+      // Perspective mode: apply ZOOM_THRESHOLD and angular culling
+      const camAngle = Math.atan2(camera.position.z, camera.position.x);
+      const camHDist = Math.sqrt(camera.position.x ** 2 + camera.position.z ** 2);
+      const zoomed   = camHDist < ZOOM_THRESHOLD;
+      const ceil2    = ceilingDate.toISOString().slice(0, 10);
+
+      for (const seg of arcSegments) {
+        if (!ribbonVisible || !zoomed) {
+          seg.innerLine.visible = false;
+          seg.outerLine.visible = false;
+          if (seg.meshFill) seg.meshFill.visible = false;
+          continue;
+        }
+        if (seg.endDate > ceilingDate) {
+          seg.innerLine.visible = false;
+          seg.outerLine.visible = false;
+          if (seg.meshFill) seg.meshFill.visible = false;
+          continue;
+        }
+        // Angular culling: segment midpoint angle
+        const midAngle = dateToAngle(new Date((seg.startDate.getTime() + seg.endDate.getTime()) / 2));
+        let diff = midAngle - camAngle;
+        if (diff >  Math.PI) diff -= 2 * Math.PI;
+        if (diff < -Math.PI) diff += 2 * Math.PI;
+        const inFront = Math.abs(diff) < Math.PI / 2;
+        seg.innerLine.visible = inFront;
+        seg.outerLine.visible = inFront;
+        if (seg.meshFill) seg.meshFill.visible = inFront;
+      }
     }
   }
 
   // ── Label and divider visibility ───────────────────────────────────────
   if (planMode || detailMode) {
-    const ceil      = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : null;
-    const floor     = floorDate   ? floorDate.toISOString().slice(0, 10)   : null;
+    const ceil  = ceilingDate ? ceilingDate.toISOString().slice(0, 10) : null;
+    const floor = floorDate   ? floorDate.toISOString().slice(0, 10)   : null;
+
+    // In plan mode, only show 1 year back
+    let planFloor = null;
+    if (planMode && ceilingDate) {
+      const pf = new Date(ceilingDate);
+      pf.setFullYear(pf.getFullYear() - 1);
+      planFloor = pf.toISOString().slice(0, 10);
+    }
 
     // Deduplicate month labels: keep the most recent per-month label at/below ceiling
     const latestByMonth = new Map();
     for (const label of labels) {
       if (label.userData.isYearBoundary) continue;
       if (ceil && label.userData.date?.toISOString().slice(0, 10) > ceil) continue;
-      if (floor && label.userData.date?.toISOString().slice(0, 10) < floor) continue;
+      const effectiveFloor = planFloor || floor;
+      if (effectiveFloor && label.userData.date?.toISOString().slice(0, 10) < effectiveFloor) continue;
       const m = label.userData.month;
       if (!latestByMonth.has(m) || label.userData.y > latestByMonth.get(m).userData.y) {
         latestByMonth.set(m, label);
@@ -271,8 +373,8 @@ export function updateRibbonLabels(
       const segDateISO = seg.userData.date?.toISOString().slice(0, 10);
       let vis = true;
       if (ceil  && segDateISO > ceil)  vis = false;
-      if (floor && segDateISO < floor) vis = false;
-      // Fallback to Y-based check when no date available
+      const effectiveFloor = planFloor || floor;
+      if (effectiveFloor && segDateISO < effectiveFloor) vis = false;
       if (!seg.userData.date) {
         vis = seg.userData.y >= clipY - 8 && seg.userData.y <= clipY + 0.5;
       }

@@ -28,7 +28,7 @@ let currentUser = null;
 })();
 
 // ── Constants ────────────────────────────────────────────────────────────────
-const DAYS_IN_YEAR = 365.25;
+const DAYS_IN_YEAR = 365;
 const MS_PER_DAY = 86400000;
 
 // ── Three.js setup ──────────────────────────────────────────────────────────

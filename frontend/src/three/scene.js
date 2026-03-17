@@ -36,7 +36,7 @@ export function initScene() {
   scene.add(ground);
 
   // Spiral — hardcoded birthday 40 years ago
-  const DAYS_IN_YEAR = 365.25;
+  const DAYS_IN_YEAR = 365;
   const MS_PER_DAY = 86400000;
   const today = new Date();
   const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());

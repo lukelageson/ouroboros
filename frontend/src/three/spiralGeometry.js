@@ -44,8 +44,8 @@ export function buildSpiralSegments(birthday, today) {
     geo.setPositions(positions);
 
     const mat = new LineMaterial({
-      color:       0xfff5e6,
-      linewidth:   3,         // pixels
+      color:       0xffe4b5,
+      linewidth:   2,         // pixels
       resolution,
       transparent: true,
       opacity:     1.0,
@@ -100,6 +100,20 @@ export function updateSpiralVisibility(segments, ceilingDate, floorDate = null, 
     } else {
       line.material.opacity = 1.0;
     }
+  }
+}
+
+/**
+ * Update spiral linewidth based on camera horizontal distance and view mode.
+ * - perspective: scales from 3px (close) to 1px (far)
+ * - plan / detail: fixed 1px
+ */
+export function updateSpiralLineWidth(segments, camHDist, mode) {
+  const lw = (mode === 'plan' || mode === 'detail')
+    ? 1
+    : Math.max(1, Math.min(3, 120 / camHDist));
+  for (const { line } of segments) {
+    line.material.linewidth = lw;
   }
 }
 

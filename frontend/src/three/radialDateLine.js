@@ -16,7 +16,7 @@ import { scene } from './renderer.js';
 import { getActiveCamera } from './renderer.js';
 import { dateToAngle } from './spiralMath.js';
 
-const DAYS_IN_YEAR     = 365.25;
+const DAYS_IN_YEAR     = 365;
 const MS_PER_DAY       = 86400000;
 const SPRING_EQUINOX_DAY = 79;
 const LINE_LENGTH      = 46.5; // RIBBON_RADIUS + RIBBON_WIDTH
@@ -33,6 +33,7 @@ let _selectedDOY     = 0;  // day-of-year, 0–364
 let _birthdayDate    = null;
 let _dragging        = false;
 let _changeCallbacks = [];
+let _loadedEntries   = [];
 
 // Reusable temporaries
 const _raycaster = new THREE.Raycaster();
@@ -139,6 +140,30 @@ function _attachDragHandlers() {
     if (hit) {
       _currentAngle = Math.atan2(_dragTarget.z, _dragTarget.x);
       _selectedDOY  = _angleToDayOfYear(_currentAngle);
+
+      // Snap to nearest loaded entry within 5 days
+      if (_loadedEntries.length) {
+        let bestEntry = null;
+        let bestDist  = 5; // days threshold
+        for (const e of _loadedEntries) {
+          const d = new Date(e.entry_date);
+          const jan1 = new Date(d.getFullYear(), 0, 1);
+          let entryDOY = (d - jan1) / (MS_PER_DAY);
+          // Adjust for leap year (mirror spiralMath._dayOfYear)
+          const isLeap = (yr => (yr % 4 === 0 && yr % 100 !== 0) || yr % 400 === 0)(d.getFullYear());
+          if (isLeap && d.getMonth() >= 2) entryDOY -= 1;
+          // Wrap-around distance on [0, DAYS_IN_YEAR)
+          let dist = Math.abs(entryDOY - _selectedDOY);
+          if (dist > DAYS_IN_YEAR / 2) dist = DAYS_IN_YEAR - dist;
+          if (dist < bestDist) { bestDist = dist; bestEntry = { doy: entryDOY }; }
+        }
+        if (bestEntry) {
+          _selectedDOY  = bestEntry.doy;
+          const daysSinceSpring = (_selectedDOY - SPRING_EQUINOX_DAY + DAYS_IN_YEAR) % DAYS_IN_YEAR;
+          _currentAngle = (daysSinceSpring / DAYS_IN_YEAR) * 2 * Math.PI;
+        }
+      }
+
       _updateGeometry();
       for (const cb of _changeCallbacks) cb(_selectedDOY);
     }
@@ -186,4 +211,11 @@ export function setRadialDateLineVisible(visible) {
  */
 export function onDateLineChange(callback) {
   _changeCallbacks.push(callback);
+}
+
+/**
+ * Provide the loaded entries array so the drag handler can snap to them.
+ */
+export function setLoadedEntries(entries) {
+  _loadedEntries = entries || [];
 }

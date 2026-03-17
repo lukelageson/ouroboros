@@ -6,7 +6,7 @@ import { positionPanelFacingCamera } from './panelManager.js';
 const container = document.getElementById('app');
 
 // WebGL renderer
-const webgl = new THREE.WebGLRenderer({ antialias: true });
+const webgl = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 webgl.setSize(window.innerWidth, window.innerHeight);
 webgl.setPixelRatio(window.devicePixelRatio);
 

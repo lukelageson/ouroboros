@@ -40,7 +40,7 @@ scene.add(dir);
 
 // ── Demo spiral ──────────────────────────────────────────────────────────────
 
-const DAYS_IN_YEAR = 365.25;
+const DAYS_IN_YEAR = 365;
 const MS_PER_DAY = 86400000;
 const today = new Date();
 const birthday = new Date(today.getFullYear() - 40, today.getMonth(), today.getDate());
@@ -74,8 +74,8 @@ while (segStart < today) {
   geo.setPositions(positions);
 
   const mat = new LineMaterial({
-    color:       0xfff5e6,
-    linewidth:   3,
+    color:       0xffe4b5,
+    linewidth:   2,
     resolution:  spiralResolution,
     transparent: true,
     opacity:     1.0,

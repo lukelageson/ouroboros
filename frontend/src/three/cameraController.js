@@ -4,7 +4,7 @@ import { camera, controls } from './renderer.js';
 const TRANSITION_FRAMES = 60;
 
 // ── Plan / Detail view ──────────────────────────────────────────────────────
-const PLAN_H        = 180;
+const PLAN_H        = 200;
 const SPIRAL_RADIUS = 40;
 const PLAN_FOV      = THREE.MathUtils.radToDeg(
   2 * Math.atan(SPIRAL_RADIUS / (PLAN_H * 0.9))
@@ -35,6 +35,11 @@ const state = {
   toUp:       new THREE.Vector3(),
   fovStart:   60,
   fovTarget:  60,
+
+  // Saved perspective camera state for round-tripping plan → perspective
+  _savedPerspectivePos:    null,
+  _savedPerspectiveTarget: null,
+  _savedPerspectiveFov:    null,
 };
 
 // ── Crop (setViewOffset) state ──────────────────────────────────────────────
@@ -126,6 +131,13 @@ export function setViewMode(mode, spiralTopY, options = {}) {
   controls.enabled = false;
 
   if (mode === 'plan') {
+    // Save current perspective camera state before entering plan
+    if (state.viewMode !== 'plan' && state.viewMode !== 'detail') {
+      state._savedPerspectivePos    = camera.position.clone();
+      state._savedPerspectiveTarget = controls.target.clone();
+      state._savedPerspectiveFov    = camera.fov;
+    }
+
     state.toPos.set(0, spiralTopY + PLAN_H, 0);
     state.toTarget.set(0, spiralTopY, 0);
     state.toUp.set(0, 0, -1);
@@ -165,10 +177,16 @@ export function setViewMode(mode, spiralTopY, options = {}) {
     _startCropAnimation(targetOffX, targetOffY, targetCropW, targetCropH);
 
   } else { // 'perspective'
-    state.toPos.set(0, spiralTopY + 30, spiralTopY + 60);
-    state.toTarget.set(0, spiralTopY / 2, 0);
+    if (state.viewMode === 'plan' && state._savedPerspectivePos) {
+      state.toPos.copy(state._savedPerspectivePos);
+      state.toTarget.copy(state._savedPerspectiveTarget);
+      state.fovTarget = state._savedPerspectiveFov;
+    } else {
+      state.toPos.set(0, spiralTopY + 30, spiralTopY + 60);
+      state.toTarget.set(0, spiralTopY / 2, 0);
+      state.fovTarget = 60;
+    }
     state.toUp.set(0, 1, 0);
-    state.fovTarget = 60;
 
     // If exiting Detail View, animate crop back to full first (simultaneously with camera move)
     if (state.viewMode === 'detail' || state.targetMode === 'detail') {
@@ -220,8 +238,8 @@ export function applyDetailZoom(delta, pivotX, pivotY) {
   const pX = pivotX ?? (crop.offsetX + crop.cropW / 2);
   const pY = pivotY ?? (crop.offsetY + crop.cropH / 2);
 
-  // Scale factor: positive delta = zoom in
-  const factor   = 1 - delta;
+  // Scale factor: positive delta = zoom out (natural scroll-down = zoom out)
+  const factor   = 1 + delta;
   const newCropW = crop.cropW * factor;
   const newCropH = crop.cropH * factor;
 
@@ -238,18 +256,85 @@ export function applyDetailZoom(delta, pivotX, pivotY) {
 }
 
 /**
- * Apply a pan to the Detail View crop.
- * @param {number} dx  mouse delta X in pixels (right = positive screen = negative world)
- * @param {number} dy  mouse delta Y in pixels
+ * Project a world position to full-frame screen pixel coordinates,
+ * temporarily ignoring the current view offset (so the result is in the
+ * full 0→innerWidth / 0→innerHeight coordinate space).
  */
-export function applyDetailPan(dx, dy) {
+export function worldToDetailScreen(worldPos) {
+  // Temporarily clear view offset so project() returns full-frame NDC
+  const v = camera.view ? { ...camera.view } : null;
+  camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+  const ndc = worldPos.clone().project(camera);
+  if (v) {
+    camera.setViewOffset(v.fullWidth, v.fullHeight, v.offsetX, v.offsetY, v.width, v.height);
+    camera.updateProjectionMatrix();
+  }
+  return {
+    x: (ndc.x + 1) * 0.5 * window.innerWidth,
+    y: (-ndc.y + 1) * 0.5 * window.innerHeight,
+  };
+}
+
+/**
+ * Unproject a full-frame screen position to world XZ, intersecting the
+ * horizontal plane at the camera's look-at Y (the current spiral level).
+ * Temporarily clears view offset so the result is in true world space.
+ */
+export function screenToWorldXZ(screenX, screenY) {
+  const v = camera.view ? { ...camera.view } : null;
+  camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+
+  const ndc = new THREE.Vector2(
+    (screenX / window.innerWidth)  *  2 - 1,
+    (screenY / window.innerHeight) * -2 + 1,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(ndc, camera);
+
+  // Intersect with horizontal plane Y = controls.target.y (the spiral focus level)
+  const planeY = controls.target.y;
+  const origin = raycaster.ray.origin;
+  const dir    = raycaster.ray.direction;
+  const t      = (planeY - origin.y) / dir.y;
+  const result = { x: origin.x + t * dir.x, z: origin.z + t * dir.z };
+
+  if (v) {
+    camera.setViewOffset(v.fullWidth, v.fullHeight, v.offsetX, v.offsetY, v.width, v.height);
+    camera.updateProjectionMatrix();
+  }
+  return result;
+}
+
+/** Returns the current crop center in full-frame pixel coordinates. */
+export function getDetailCropCenterScreen() {
+  return {
+    x: crop.offsetX + crop.cropW / 2,
+    y: crop.offsetY + crop.cropH / 2,
+  };
+}
+
+/**
+ * Animate the crop to center on the given full-frame screen position,
+ * keeping the current crop size unchanged.
+ */
+export function centerDetailViewOnScreen(screenX, screenY) {
   if (state.viewMode !== 'detail' && state.targetMode !== 'detail') return;
-  if (crop.animating) return;
+  const targetOffX = Math.max(0, Math.min(screenX - crop.cropW / 2, window.innerWidth  - crop.cropW));
+  const targetOffY = Math.max(0, Math.min(screenY - crop.cropH / 2, window.innerHeight - crop.cropH));
+  _startCropAnimation(targetOffX, targetOffY, crop.cropW, crop.cropH);
+}
 
-  // Panning the crop: moving mouse right shows what's to the right → increase offsetX
-  crop.offsetX += dx;
-  crop.offsetY += dy;
-
+/**
+ * Instantly (no animation) center the crop on the given full-frame screen position.
+ * Used during live drag so the view updates each frame without queuing animations.
+ */
+export function instantCenterDetailViewOnScreen(screenX, screenY) {
+  if (state.viewMode !== 'detail' && state.targetMode !== 'detail') return;
+  crop.animating = false;
+  crop.offsetX = Math.max(0, Math.min(screenX - crop.cropW / 2, window.innerWidth  - crop.cropW));
+  crop.offsetY = Math.max(0, Math.min(screenY - crop.cropH / 2, window.innerHeight - crop.cropH));
   _applyCrop();
 }
 
@@ -327,7 +412,7 @@ export function advanceTransition() {
     state.viewMode = state.targetMode;
 
     if (state.targetMode === 'perspective') {
-      camera.fov = 60;
+      camera.fov = state.fovTarget;
       camera.updateProjectionMatrix();
       controls.enabled      = true;
       controls.enableRotate = true;

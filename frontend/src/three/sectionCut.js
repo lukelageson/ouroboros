@@ -19,7 +19,7 @@ import { scene } from './renderer.js';
 import { dateToPosition } from './spiralMath.js';
 import { setDetailCeiling } from './cameraController.js';
 
-const DAYS_IN_YEAR = 365.25;
+const DAYS_IN_YEAR = 365;
 const MS_PER_DAY   = 86400000;
 
 // Slider sits between the mood button bottom (~52px) and the view cube top (~124px from bottom).
