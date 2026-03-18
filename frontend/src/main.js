@@ -67,7 +67,7 @@ initRenderer();
 const {
   ribbonGroup, arcSegments, dividerObjects, labels,
   spiralGroup, spiralSegments,
-  spiralTopY, birthday, today, ground,
+  spiralTopY, birthday, today, ground, groundOverlay,
 } = initScene();
 
 let ribbonVisible = true;
@@ -128,8 +128,12 @@ if (ground && ground.onBeforeRender) {
     const emptyMesh = getEmptyBeadMesh();
     const wasVisible = emptyMesh?.visible;
     if (emptyMesh) emptyMesh.visible = false;
+    // Hide overlay during reflection pass (avoid self-reflection loop)
+    if (groundOverlay) groundOverlay.visible = false;
     _origGroundBeforeRender.call(this, renderer, scn, cam, geo, mat, grp);
     if (emptyMesh && wasVisible !== undefined) emptyMesh.visible = wasVisible;
+    // Restore overlay visibility (frame callback will set it correctly next frame)
+    if (groundOverlay) groundOverlay.visible = true;
   };
 }
 
@@ -149,10 +153,12 @@ registerFrameCallback(() => {
 
   if (mode === 'detail') {
     if (ground) ground.visible = false;
+    if (groundOverlay) groundOverlay.visible = false;
     updateDetailLabels(loadedEntries, birthday, camera, controls.target.y, true);
   } else {
     clearDetailLabels();
     if (ground) ground.visible = (mode === 'perspective');
+    if (groundOverlay) groundOverlay.visible = (mode === 'perspective');
   }
 
   setPanelViewMode(mode || 'perspective');

@@ -10,10 +10,10 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 export function buildGroundPlane() {
   const geometry = new THREE.PlaneGeometry(10000, 10000);
   const ground = new Reflector(geometry, {
-    clipBias:      0.003,
-    textureWidth:  512,
-    textureHeight: 512,
-    color:         0x181818,
+    clipBias:      0.001,
+    textureWidth:  1024,
+    textureHeight: 1024,
+    color:         0x444444,
   });
 
   ground.rotation.x = -Math.PI / 2;
