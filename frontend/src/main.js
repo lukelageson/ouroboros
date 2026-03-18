@@ -15,11 +15,11 @@ import {
   isPlanMode, isDetailMode, getCurrentMode,
   setPlanTargetY,
   applyDetailZoom,
-  worldToDetailScreen, getDetailCropCenterScreen, screenToWorldXZ,
-  centerDetailViewOnScreen, instantCenterDetailViewOnScreen,
+  worldToDetailScreen, getDetailCropScale,
+  moveDetailCamera,
   onResizeDetailView,
 } from './three/cameraController.js';
-import { dateToPosition, angleToDate } from './three/spiralMath.js';
+import { dateToPosition, dateToAngle } from './three/spiralMath.js';
 import {
   initSectionCut,
   showSectionCutSlider,
@@ -97,23 +97,41 @@ onDateLineChange((doy) => {
   updateEntryColumn(doy, getSectionCutDate(), loadedEntries, birthday);
 });
 
+// ── Detail focus date (tracks the spiral point at the center of detail view) ──
+let _detailFocusDate = null;
+
 // ── View Cube ─────────────────────────────────────────────────────────────────
 initViewCube(webgl, camera, controls, (mode) => {
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'detail') {
     setSectionCutY(spiralTopY);
+    _detailFocusDate = new Date();
     let detailFocusPos = todayPos;
     if (loadedEntries && loadedEntries.length > 0) {
       const latest = loadedEntries.reduce((a, b) =>
         new Date(a.entry_date) > new Date(b.entry_date) ? a : b
       );
-      detailFocusPos = dateToPosition(new Date(latest.entry_date), birthday);
+      _detailFocusDate = new Date(latest.entry_date);
+      detailFocusPos = dateToPosition(_detailFocusDate, birthday);
     }
     setViewMode('detail', spiralTopY, { todayPos: detailFocusPos });
   } else {
+    _detailFocusDate = null;
     setViewMode(mode, effectiveTop);
   }
 });
+
+// ── Ground reflection: exclude dense empty beads from the Reflector render ────
+if (ground && ground.onBeforeRender) {
+  const _origGroundBeforeRender = ground.onBeforeRender;
+  ground.onBeforeRender = function (renderer, scn, cam, geo, mat, grp) {
+    const emptyMesh = getEmptyBeadMesh();
+    const wasVisible = emptyMesh?.visible;
+    if (emptyMesh) emptyMesh.visible = false;
+    _origGroundBeforeRender.call(this, renderer, scn, cam, geo, mat, grp);
+    if (emptyMesh && wasVisible !== undefined) emptyMesh.visible = wasVisible;
+  };
+}
 
 // ── Frame callbacks ───────────────────────────────────────────────────────────
 registerFrameCallback(() => {
@@ -189,9 +207,6 @@ canvas.addEventListener('mousedown', (e) => {
     _isDetailPanning  = true;
     _panDownX         = e.clientX;
     _panDownY         = e.clientY;
-    _panStartCenter   = getDetailCropCenterScreen();
-    const { x: wx, z: wz } = screenToWorldXZ(_panStartCenter.x, _panStartCenter.y);
-    _panFocusDate = angleToDate(Math.atan2(wz, wx), getSectionCutDate());
   }
 });
 
@@ -281,12 +296,10 @@ canvas.addEventListener('click', (e) => {
   }
 });
 
-// ── Detail-view crop pan ──────────────────────────────────────────────────────
+// ── Detail-view spiral-tangent pan ───────────────────────────────────────────
 let _isDetailPanning  = false;
 let _panDownX         = 0;
 let _panDownY         = 0;
-let _panStartCenter   = null;
-let _panFocusDate     = null;
 
 function _openCreateForInstance(pointIndex) {
   const dateISO = getEmptyBeadDate(pointIndex);
@@ -311,29 +324,49 @@ let lastMouseEvent = null;
 
 window.addEventListener('mousemove', (e) => {
   lastMouseEvent = e;
-  if (_isDetailPanning && _panStartCenter) {
-    const totalDx  = e.clientX - _panDownX;
-    const totalDy  = e.clientY - _panDownY;
-    const targetCX = _panStartCenter.x - totalDx;
-    const targetCY = _panStartCenter.y - totalDy;
+  if (_isDetailPanning && _detailFocusDate) {
+    // Incremental mouse delta in screen pixels
+    const sdx = e.clientX - _panDownX;
+    const sdy = e.clientY - _panDownY;
+    _panDownX = e.clientX;
+    _panDownY = e.clientY;
 
-    const { x: wx, z: wz } = screenToWorldXZ(targetCX, targetCY);
-    const angle   = Math.atan2(wz, wx);
-    const focusDate = _panFocusDate || getSectionCutDate();
-    const newDate = angleToDate(angle, focusDate);
-    if (newDate) {
-      _panFocusDate = newDate;
-      const pos = dateToPosition(newDate, birthday);
-      const { x: sx, y: sy } = worldToDetailScreen(pos);
-      instantCenterDetailViewOnScreen(sx, sy);
+    // Compute tangent direction in full-frame pixels via two nearby points
+    const MS_PER_DAY = 86400000;
+    const prevPos = dateToPosition(new Date(_detailFocusDate.getTime() - MS_PER_DAY), birthday);
+    const nextPos = dateToPosition(new Date(_detailFocusDate.getTime() + MS_PER_DAY), birthday);
+    const pScreen = worldToDetailScreen(prevPos);
+    const nScreen = worldToDetailScreen(nextPos);
+
+    const tFFx = nScreen.x - pScreen.x;
+    const tFFy = nScreen.y - pScreen.y;
+    const tFFlen = Math.sqrt(tFFx * tFFx + tFFy * tFFy);
+
+    if (tFFlen > 0.001) {
+      const tNormX = tFFx / tFFlen;
+      const tNormY = tFFy / tFFlen;
+
+      // Scale screen-pixel delta to full-frame-pixel delta for 1:1 speed
+      const scale = getDetailCropScale();
+      const ffDx = sdx * scale.x;
+      const ffDy = sdy * scale.y;
+
+      // Project onto tangent and convert to days
+      const projected = ffDx * tNormX + ffDy * tNormY;
+      const pixelsPerDay = tFFlen / 2;
+      const daysDelta = -projected / pixelsPerDay;
+
+      _detailFocusDate = new Date(_detailFocusDate.getTime() + daysDelta * MS_PER_DAY);
+
+      // Move camera above the new focus position
+      const newPos = dateToPosition(_detailFocusDate, birthday);
+      moveDetailCamera(newPos.x, newPos.z);
     }
   }
 });
 
 window.addEventListener('mouseup', () => {
   _isDetailPanning = false;
-  _panStartCenter  = null;
-  _panFocusDate    = null;
 });
 
 registerFrameCallback((cam) => {
@@ -347,18 +380,22 @@ registerFrameCallback(() => {
   if (mode !== 'perspective' && mode !== 'plan' && mode !== 'detail') return;
 
   const ceilingDate = getSectionCutDate();
+  // Dim beads in perspective view (hover callback overrides for the hovered bead)
+  const baseEmissive = mode === 'perspective' ? 0.15 : 0.3;
 
   if (mode === 'detail') {
     const floorDate = getFloorDate();
     for (const mesh of getAllBeadMeshes()) {
       const d = mesh.userData.entryDate;
       mesh.visible = d <= ceilingDate && d >= floorDate;
+      mesh.material.emissiveIntensity = baseEmissive;
     }
     return;
   }
 
   for (const mesh of getAllBeadMeshes()) {
     mesh.visible = mesh.userData.entryDate <= ceilingDate;
+    mesh.material.emissiveIntensity = baseEmissive;
   }
 });
 
@@ -473,13 +510,11 @@ registerFrameCallback((cam) => {
   document.getElementById('app').appendChild(btn);
 })();
 
-// ── Detail zoom — always pivot on crop center ──────────────────────────────────
+// ── Detail zoom ─────────────────────────────────────────────────────────────────
 canvas.addEventListener('wheel', (e) => {
   if (getCurrentMode() !== 'detail') return;
   e.preventDefault();
-  const zoomDelta = e.deltaY / 500;
-  const cropCenter = getDetailCropCenterScreen();
-  applyDetailZoom(zoomDelta, cropCenter.x, cropCenter.y);
+  applyDetailZoom(e.deltaY / 500);
 }, { passive: false });
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────

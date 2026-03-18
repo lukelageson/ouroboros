@@ -70,9 +70,10 @@ export function buildRibbon(birthday, today) {
   const fillMat = new THREE.MeshBasicMaterial({
     color:       0xffe4b5,
     transparent: true,
-    opacity:     0.06,
+    opacity:     0.2,
     side:        THREE.DoubleSide,
     depthWrite:  false,
+    fog:         false,
   });
 
   // Monthly arc segments — start from birthday's month
@@ -222,7 +223,7 @@ export function buildRibbon(birthday, today) {
       return lbl;
     }
 
-    labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,228,181,0.12)', false));
+    labels.push(makeLabel(MONTH_NAMES[month].toUpperCase(), '50px', 'rgba(255,228,181,0.4)', false));
     if (isYearBound) {
       labels.push(makeLabel(String(year), '13px', 'rgba(255,228,181,0.9)', true));
     }
@@ -277,29 +278,15 @@ export function updateRibbonLabels(
     const ceil  = ceilingDate;
 
     if (planMode) {
-      // Plan mode: only show 1 year back from ceiling, and cull by ceiling date angle
+      // Plan mode: show 1 year back from ceiling, full circle (no angular culling)
       const floorDate1yr = new Date(ceil);
       floorDate1yr.setFullYear(floorDate1yr.getFullYear() - 1);
 
-      const refAngle = dateToAngle(ceil);
-
       for (const seg of arcSegments) {
         const inRange = seg.endDate <= ceil && seg.endDate > floorDate1yr;
-        if (!inRange) {
-          seg.innerLine.visible = false;
-          seg.outerLine.visible = false;
-          if (seg.meshFill) seg.meshFill.visible = false;
-          continue;
-        }
-        // Angular culling: only show segments within ±90° of the ceiling date's angle
-        const midAngle = dateToAngle(new Date((seg.startDate.getTime() + seg.endDate.getTime()) / 2));
-        let diff = midAngle - refAngle;
-        if (diff >  Math.PI) diff -= 2 * Math.PI;
-        if (diff < -Math.PI) diff += 2 * Math.PI;
-        const inFront = Math.abs(diff) < Math.PI / 2;
-        seg.innerLine.visible = ribbonVisible && inFront;
-        seg.outerLine.visible = ribbonVisible && inFront;
-        if (seg.meshFill) seg.meshFill.visible = ribbonVisible && inFront;
+        seg.innerLine.visible = ribbonVisible && inRange;
+        seg.outerLine.visible = ribbonVisible && inRange;
+        if (seg.meshFill) seg.meshFill.visible = ribbonVisible && inRange;
       }
     } else if (detailMode) {
       const floor = floorDate || null;
@@ -416,6 +403,7 @@ export function updateRibbonLabels(
 
     for (const label of labels) {
       if (!ribbonVisible || !zoomed) { label.visible = false; continue; }
+      if (label.userData.isYearBoundary) { label.visible = false; continue; }
       const lDate = label.userData.date?.toISOString().slice(0, 10);
       if (ceil && lDate && lDate > ceil) { label.visible = false; continue; }
       if (Math.abs(label.userData.y - camY) > yMax) { label.visible = false; continue; }

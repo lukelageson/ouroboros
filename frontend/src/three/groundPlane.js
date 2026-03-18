@@ -1,22 +1,25 @@
 import * as THREE from 'three';
+import { Reflector } from 'three/addons/objects/Reflector.js';
 
 /**
- * Builds a simple dark ground plane at Y=0.
- * Large size (10000x10000) combined with scene fog creates infinite appearance.
- * No reflections — keeps the scene clean and avoids depth conflicts with Points.
+ * Builds a reflective ground plane at Y=0 using Three.js Reflector.
+ * Reflects filled beads as subtle colored glimmers on a dark polished floor.
+ * Empty beads (Points) are excluded from the reflection in main.js to prevent
+ * the dense dot cloud from overwhelming the reflection.
  */
 export function buildGroundPlane() {
   const geometry = new THREE.PlaneGeometry(10000, 10000);
-  const material = new THREE.MeshStandardMaterial({
-    color:     0x110a06,
-    metalness: 0.1,
-    roughness: 0.95,
+  const ground = new Reflector(geometry, {
+    clipBias:      0.003,
+    textureWidth:  512,
+    textureHeight: 512,
+    color:         0x181818,
   });
 
-  const ground = new THREE.Mesh(geometry, material);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = 0;
-  ground.receiveShadow = true;
+  ground.renderOrder = -1;
+  ground.material.depthWrite = false;
 
   return ground;
 }

@@ -32,6 +32,7 @@ export function initScene() {
 
   // Ground plane
   const ground = buildGroundPlane();
+  ground.renderOrder = -1;
   scene.add(ground);
 
   // Spiral parameters — kept for positioning calculations

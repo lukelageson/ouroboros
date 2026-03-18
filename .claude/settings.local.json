@@ -35,7 +35,12 @@
       "Bash(find /c/Users/Luke/Documents/11_Coding/Repos/ouroboros -maxdepth 2 -name README* -o -name *.md)",
       "Bash(find /c/Users/Luke/Documents/11_Coding/Repos/ouroboros/backend/src -name *.js)",
       "Bash(node -e \":*)",
-      "Bash(node src/db/seedDemo.js)"
+      "Bash(node src/db/seedDemo.js)",
+      "Bash(curl -s http://localhost:5173/src/three/popups/readOverlay2D.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/app.html)",
+      "Bash(curl -s http://localhost:5173/src/main.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/src/three/popups/readOverlay2D.js)",
+      "Bash(node backend/src/db/seedDemo.js)"
     ]
   }
 }

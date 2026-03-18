@@ -4,11 +4,11 @@ import { camera, controls } from './renderer.js';
 const TRANSITION_FRAMES = 60;
 
 // ── Plan / Detail view ──────────────────────────────────────────────────────
-const PLAN_H        = 200;
-const SPIRAL_RADIUS = 40;
-const PLAN_FOV      = THREE.MathUtils.radToDeg(
-  2 * Math.atan(SPIRAL_RADIUS / (PLAN_H * 0.9))
-); // ≈ 28° — outermost coil fills ~90 % of screen height
+const PLAN_H               = 200;
+const PLAN_VISIBLE_RADIUS  = 48; // ribbon outer edge + handle sphere radius
+const PLAN_FOV             = THREE.MathUtils.radToDeg(
+  2 * Math.atan(PLAN_VISIBLE_RADIUS / (PLAN_H * 0.9))
+); // ~30° — leaves ~10% margin around the handle sphere
 
 // Detail View initial zoom: 50% of full frame = 2× zoom
 const DETAIL_ENTRY_CROP_FRACTION = 0.5;
@@ -42,6 +42,12 @@ const state = {
   _savedPerspectivePos:    null,
   _savedPerspectiveTarget: null,
   _savedPerspectiveFov:    null,
+
+  // Detail view: world position to center crop on after transition settles
+  _detailFocusPos: null,
+
+  // Per-transition frame count override (e.g. 90 for plan/detail → perspective)
+  _transitionFrames: TRANSITION_FRAMES,
 };
 
 // ── Crop (setViewOffset) state ──────────────────────────────────────────────
@@ -156,21 +162,24 @@ export function setViewMode(mode, spiralTopY, options = {}) {
   } else if (mode === 'detail') {
     const todayPos = options.todayPos || new THREE.Vector3(0, spiralTopY, 0);
 
-    // Camera: animate to the same overhead position as Plan View
-    state.toPos.set(0, spiralTopY + PLAN_H, 0);
-    state.toTarget.set(0, spiralTopY, 0);
+    // Save focus position for re-centering after transition settles
+    state._detailFocusPos = todayPos.clone();
+
+    // Camera: animate to overhead position centered on focus point
+    state.toPos.set(todayPos.x, spiralTopY + PLAN_H, todayPos.z);
+    state.toTarget.set(todayPos.x, spiralTopY, todayPos.z);
     state.toUp.set(0, 0, -1);
     state.fovTarget = PLAN_FOV;
+    state._transitionFrames = TRANSITION_FRAMES;
 
-    // Crop: start from full frame, animate to target crop centered on today
+    // Crop: start from full frame, animate to centered crop (no offset panning)
     const fullW = window.innerWidth;
     const fullH = window.innerHeight;
-    const { screenX, screenY } = _todayScreenPos(todayPos);
 
     const targetCropW = fullW * DETAIL_ENTRY_CROP_FRACTION;
     const targetCropH = fullH * DETAIL_ENTRY_CROP_FRACTION;
-    const targetOffX  = Math.max(0, Math.min(screenX - targetCropW / 2, fullW - targetCropW));
-    const targetOffY  = Math.max(0, Math.min(screenY - targetCropH / 2, fullH - targetCropH));
+    const targetOffX  = (fullW - targetCropW) / 2;
+    const targetOffY  = (fullH - targetCropH) / 2;
 
     // Initialize crop to full frame so the first call to _applyCrop is a no-op
     crop.offsetX = 0; crop.offsetY = 0;
@@ -179,14 +188,25 @@ export function setViewMode(mode, spiralTopY, options = {}) {
     _startCropAnimation(targetOffX, targetOffY, targetCropW, targetCropH);
 
   } else { // 'perspective'
-    if (state.viewMode === 'plan' && state._savedPerspectivePos) {
+    if (state.viewMode === 'plan' || state.viewMode === 'detail') {
+      // Transition from overhead: compute a smooth angled perspective target
+      const targetY = spiralTopY;
+      state.toPos.set(0, targetY + 30, 60);
+      state.toTarget.set(0, targetY, 0);
+      state.fovTarget = 60;
+      // Nudge fromUp away from the exact singularity (0,0,-1 → 0,1,0 crosses zero)
+      state.fromUp.set(0, 0.01, -1).normalize();
+      state._transitionFrames = 90;
+    } else if (state._savedPerspectivePos) {
       state.toPos.copy(state._savedPerspectivePos);
       state.toTarget.copy(state._savedPerspectiveTarget);
       state.fovTarget = state._savedPerspectiveFov;
+      state._transitionFrames = TRANSITION_FRAMES;
     } else {
-      state.toPos.set(0, spiralTopY + 30, spiralTopY + 60);
+      state.toPos.set(0, spiralTopY + 30, 60);
       state.toTarget.set(0, spiralTopY / 2, 0);
       state.fovTarget = 60;
+      state._transitionFrames = TRANSITION_FRAMES;
     }
     state.toUp.set(0, 1, 0);
 
@@ -224,39 +244,24 @@ export function getCurrentMode() { return state.viewMode; }
 
 /**
  * Apply a zoom step to the Detail View crop.
- * delta > 0 = zoom in (shrink crop), delta < 0 = zoom out (grow crop).
- *
- * @param {number} delta    pixels or normalized zoom units (use e.deltaY / 500)
- * @param {number} pivotX   screen X to zoom toward (defaults to center)
- * @param {number} pivotY   screen Y to zoom toward (defaults to center)
+ * delta > 0 = zoom out (shrink crop), delta < 0 = zoom in (grow crop).
+ * Crop is always centered — panning is handled by camera movement.
  */
-export function applyDetailZoom(delta, pivotX, pivotY) {
+export function applyDetailZoom(delta) {
   if (state.viewMode !== 'detail' && state.targetMode !== 'detail') return;
   if (crop.animating) return; // don't interrupt entry animation
 
   const fullW = window.innerWidth;
   const fullH = window.innerHeight;
 
-  const pX = pivotX ?? (crop.offsetX + crop.cropW / 2);
-  const pY = pivotY ?? (crop.offsetY + crop.cropH / 2);
+  const factor = 1 + delta;
 
-  // Scale factor: positive delta = zoom out (natural scroll-down = zoom out)
-  const factor   = 1 + delta;
-
-  // Pre-clamp crop size BEFORE computing offset — prevents center drift at zoom limits
-  const newCropW = Math.max(fullW * DETAIL_MIN_CROP_FRACTION,
-                   Math.min(crop.cropW * factor, fullW * DETAIL_MAX_CROP_FRACTION));
-  const newCropH = Math.max(fullH * DETAIL_MIN_CROP_FRACTION,
-                   Math.min(crop.cropH * factor, fullH * DETAIL_MAX_CROP_FRACTION));
-
-  // Adjust offset so the pivot point stays fixed (ratio is 1.0 when size didn't change)
-  const newOffX  = pX - (pX - crop.offsetX) * (newCropW / crop.cropW);
-  const newOffY  = pY - (pY - crop.offsetY) * (newCropH / crop.cropH);
-
-  crop.cropW   = newCropW;
-  crop.cropH   = newCropH;
-  crop.offsetX = newOffX;
-  crop.offsetY = newOffY;
+  crop.cropW = Math.max(fullW * DETAIL_MIN_CROP_FRACTION,
+               Math.min(crop.cropW * factor, fullW * DETAIL_MAX_CROP_FRACTION));
+  crop.cropH = Math.max(fullH * DETAIL_MIN_CROP_FRACTION,
+               Math.min(crop.cropH * factor, fullH * DETAIL_MAX_CROP_FRACTION));
+  crop.offsetX = (fullW - crop.cropW) / 2;
+  crop.offsetY = (fullH - crop.cropH) / 2;
 
   _applyCrop();
 }
@@ -354,6 +359,37 @@ export function getDetailCenterY() {
 }
 
 /**
+ * Move the detail-view camera to be directly above a world XZ position.
+ * Crop stays centered — this is how detail panning works (camera follows spiral).
+ */
+export function moveDetailCamera(worldX, worldZ) {
+  if (state.viewMode !== 'detail' && state.targetMode !== 'detail') return;
+  const y = state.spiralTopY;
+  camera.position.set(worldX, y + PLAN_H, worldZ);
+  controls.target.set(worldX, y, worldZ);
+  camera.lookAt(controls.target);
+  camera.updateProjectionMatrix();
+
+  const fullW = window.innerWidth;
+  const fullH = window.innerHeight;
+  crop.offsetX = (fullW - crop.cropW) / 2;
+  crop.offsetY = (fullH - crop.cropH) / 2;
+  _applyCrop();
+}
+
+/**
+ * Returns the ratio of crop size to full frame size.
+ * Used to convert screen-pixel deltas to full-frame-pixel deltas for 1:1 panning.
+ */
+export function getDetailCropScale() {
+  if (crop.cropW === 0) return { x: 1, y: 1 };
+  return {
+    x: crop.cropW / window.innerWidth,
+    y: crop.cropH / window.innerHeight,
+  };
+}
+
+/**
  * Handle window resize while in Detail View: scale the crop proportionally.
  */
 export function onResizeDetailView(oldW, oldH) {
@@ -400,8 +436,10 @@ export function advanceTransition() {
   // ── Camera position transition ───────────────────────────────────────
   if (!state.active) return;
 
+  const transFrames = state._transitionFrames || TRANSITION_FRAMES;
+
   state.frame++;
-  const t     = Math.min(state.frame / TRANSITION_FRAMES, 1);
+  const t     = Math.min(state.frame / transFrames, 1);
   const eased = easeInOut(t);
 
   camera.position.lerpVectors(state.fromPos, state.toPos, eased);
@@ -413,7 +451,7 @@ export function advanceTransition() {
 
   camera.lookAt(controls.target);
 
-  if (state.frame >= TRANSITION_FRAMES) {
+  if (state.frame >= transFrames) {
     state.active   = false;
     state.viewMode = state.targetMode;
 
@@ -426,8 +464,15 @@ export function advanceTransition() {
       controls.maxPolarAngle = Math.PI / 2;
       controls.minPolarAngle = 0;
     } else if (state.targetMode === 'detail') {
-      // OrbitControls fully disabled — zoom/pan handled by applyDetailZoom/Pan
+      // OrbitControls fully disabled — zoom/pan handled by camera movement
       controls.enabled = false;
+
+      // Ensure crop is centered (camera is already above the focus point)
+      const fullW = window.innerWidth;
+      const fullH = window.innerHeight;
+      crop.offsetX = (fullW - crop.cropW) / 2;
+      crop.offsetY = (fullH - crop.cropH) / 2;
+      _applyCrop();
     }
     // Plan: controls stay disabled
   }
