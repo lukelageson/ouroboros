@@ -171,7 +171,7 @@ registerFrameCallback(() => {
 registerFrameCallback((cam) => {
   const mode        = getCurrentMode();
   const ceilingDate = getSectionCutDate();
-  const floorDate   = (mode === 'detail') ? getFloorDate() : null;
+  const floorDate   = isDetailMode() ? getFloorDate() : null;
 
   if (spiralSegments.length) {
     updateSpiralVisibility(spiralSegments, ceilingDate, floorDate, isPlanMode());
