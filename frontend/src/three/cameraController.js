@@ -154,6 +154,13 @@ export function setViewMode(mode, spiralTopY, options = {}) {
     state.toTarget.set(0, spiralTopY, 0);
     state.toUp.set(0, 0, -1);
     state.fovTarget = PLAN_FOV;
+    state._transitionFrames = 90;
+
+    // Nudge fromUp away from exact (0,1,0) to avoid gimbal snap at the
+    // (0,1,0) → (0,0,-1) singularity crossing during the slerp.
+    if (Math.abs(state.fromUp.x) < 0.001 && Math.abs(state.fromUp.z) < 0.001) {
+      state.fromUp.set(0, 1, -0.01).normalize();
+    }
 
     // Clear any active crop when entering Plan View
     if (crop.animating || crop.cropW > 0) {
@@ -215,13 +222,21 @@ export function setViewMode(mode, spiralTopY, options = {}) {
 
   } else { // 'perspective'
     if (state.viewMode === 'plan' || state.viewMode === 'detail') {
-      // Transition from overhead: compute a smooth angled perspective target
-      const targetY = spiralTopY;
-      state.toPos.set(0, targetY + 30, 60);
-      state.toTarget.set(0, targetY, 0);
-      state.fovTarget = 60;
-      // Nudge fromUp away from the exact singularity (0,0,-1 → 0,1,0 crosses zero)
-      state.fromUp.set(0, 0.01, -1).normalize();
+      // Transition from overhead to perspective.
+      // Prefer the saved perspective position; fall back to a natural angled default.
+      if (state._savedPerspectivePos) {
+        state.toPos.copy(state._savedPerspectivePos);
+        state.toTarget.copy(state._savedPerspectiveTarget);
+        state.fovTarget = state._savedPerspectiveFov;
+      } else {
+        const targetY = spiralTopY;
+        state.toPos.set(0, targetY * 0.6, 80);
+        state.toTarget.set(0, targetY * 0.4, 0);
+        state.fovTarget = 60;
+      }
+      // Larger fromUp nudge (0.15 vs 0.01) gives a smoother slerp through the
+      // (0,0,-1) → (0,1,0) singularity and prevents gimbal-lock-like snapping.
+      state.fromUp.set(0, 0.15, -1).normalize();
       state._transitionFrames = 90;
     } else if (state._savedPerspectivePos) {
       state.toPos.copy(state._savedPerspectivePos);
