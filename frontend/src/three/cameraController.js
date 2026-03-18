@@ -46,6 +46,10 @@ const state = {
   // Detail view: world position to center crop on after transition settles
   _detailFocusPos: null,
 
+  // Two-phase flag: set when perspective→detail phase 1 (move to plan) is running.
+  // When phase 1 completes, advanceTransition triggers phase 2 (crop zoom).
+  _pendingDetailAfterPlan: false,
+
   // Per-transition frame count override (e.g. 90 for plan/detail → perspective)
   _transitionFrames: TRANSITION_FRAMES,
 };
@@ -162,30 +166,52 @@ export function setViewMode(mode, spiralTopY, options = {}) {
   } else if (mode === 'detail') {
     const todayPos = options.todayPos || new THREE.Vector3(0, spiralTopY, 0);
 
-    // Save focus position for re-centering after transition settles
+    // Save focus position for use in phase 2 / panning
     state._detailFocusPos = todayPos.clone();
 
-    // Camera: animate to overhead position centered on focus point
-    state.toPos.set(todayPos.x, spiralTopY + PLAN_H, todayPos.z);
-    state.toTarget.set(todayPos.x, spiralTopY, todayPos.z);
-    state.toUp.set(0, 0, -1);
-    state.fovTarget = PLAN_FOV;
-    state._transitionFrames = TRANSITION_FRAMES;
-
-    // Crop: start from full frame, animate to centered crop (no offset panning)
     const fullW = window.innerWidth;
     const fullH = window.innerHeight;
-
     const targetCropW = fullW * DETAIL_ENTRY_CROP_FRACTION;
     const targetCropH = fullH * DETAIL_ENTRY_CROP_FRACTION;
     const targetOffX  = (fullW - targetCropW) / 2;
     const targetOffY  = (fullH - targetCropH) / 2;
 
-    // Initialize crop to full frame so the first call to _applyCrop is a no-op
-    crop.offsetX = 0; crop.offsetY = 0;
-    crop.cropW   = fullW; crop.cropH = fullH;
+    if (state.viewMode === 'plan') {
+      // ── Plan → Detail: skip camera animation, only animate crop ──
+      // Instantly reposition camera above focus point (plan is already overhead,
+      // a straight-down lateral shift is nearly imperceptible at PLAN_H=200).
+      camera.position.set(todayPos.x, spiralTopY + PLAN_H, todayPos.z);
+      controls.target.set(todayPos.x, spiralTopY, todayPos.z);
+      camera.up.set(0, 0, -1);
+      camera.lookAt(controls.target);
+      camera.updateProjectionMatrix();
 
-    _startCropAnimation(targetOffX, targetOffY, targetCropW, targetCropH);
+      // Settle into detail view immediately — only the crop animates
+      state.active = false;
+      state.viewMode = 'detail';
+      state._pendingDetailAfterPlan = false;
+      controls.enabled = false;
+
+      crop.offsetX = 0; crop.offsetY = 0;
+      crop.cropW   = fullW; crop.cropH = fullH;
+      _startCropAnimation(targetOffX, targetOffY, targetCropW, targetCropH);
+
+    } else {
+      // ── Perspective → Detail: two-phase transition ──
+      // Phase 1: animate camera to plan overhead position (no plan UI shown).
+      // Phase 2 (crop zoom) starts automatically in advanceTransition when phase 1 ends.
+      state._pendingDetailAfterPlan = true;
+      state._transitionFrames = TRANSITION_FRAMES;
+
+      state.toPos.set(0, spiralTopY + PLAN_H, 0);
+      state.toTarget.set(0, spiralTopY, 0);
+      state.toUp.set(0, 0, -1);
+      state.fovTarget = PLAN_FOV;
+
+      // Hold crop at full frame during phase 1
+      crop.offsetX = 0; crop.offsetY = 0;
+      crop.cropW   = fullW; crop.cropH = fullH;
+    }
 
   } else { // 'perspective'
     if (state.viewMode === 'plan' || state.viewMode === 'detail') {
@@ -452,7 +478,39 @@ export function advanceTransition() {
   camera.lookAt(controls.target);
 
   if (state.frame >= transFrames) {
-    state.active   = false;
+    state.active = false;
+
+    if (state._pendingDetailAfterPlan) {
+      // Phase 1 complete (camera is now at plan overhead position).
+      // Start phase 2: snap camera above focus point, then animate crop in.
+      state._pendingDetailAfterPlan = false;
+
+      const fp = state._detailFocusPos;
+      if (fp) {
+        camera.position.set(fp.x, state.spiralTopY + PLAN_H, fp.z);
+        controls.target.set(fp.x, state.spiralTopY, fp.z);
+        camera.up.set(0, 0, -1);
+        camera.lookAt(controls.target);
+        camera.updateProjectionMatrix();
+      }
+
+      // Animate crop from full frame to centered zoom
+      const fullW = window.innerWidth;
+      const fullH = window.innerHeight;
+      const targetCropW = fullW * DETAIL_ENTRY_CROP_FRACTION;
+      const targetCropH = fullH * DETAIL_ENTRY_CROP_FRACTION;
+      const targetOffX  = (fullW - targetCropW) / 2;
+      const targetOffY  = (fullH - targetCropH) / 2;
+      crop.offsetX = 0; crop.offsetY = 0;
+      crop.cropW   = fullW; crop.cropH = fullH;
+      _startCropAnimation(targetOffX, targetOffY, targetCropW, targetCropH);
+
+      // Settle into detail mode now (plan UI will not appear — targetMode is 'detail')
+      state.viewMode = 'detail';
+      controls.enabled = false;
+      return;
+    }
+
     state.viewMode = state.targetMode;
 
     if (state.targetMode === 'perspective') {
