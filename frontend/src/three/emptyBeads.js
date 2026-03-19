@@ -14,9 +14,9 @@ import { dateToPosition } from './spiralMath.js';
 
 const DOT_SIZE       = 4;       // base size — attenuates with distance
 const DOT_COLOR      = 0xffffff; // solid white
-const DOT_OPACITY    = 0.5;     // base opacity for visible dots
-const DOT_PLAN_OPACITY = 0.2;  // dimmer in plan view so filled beads stand out
-const HOVER_COLOR = 0xf5a623; // amber highlight
+const DOT_OPACITY    = 0.4;     // base opacity for visible dots
+const DOT_PLAN_OPACITY = 0.4;  // dimmer in plan view so filled beads stand out
+const HOVER_COLOR = 0xffffff; // amber highlight
 const MS_PER_DAY  = 86400000;
 
 let pointsMesh     = null;   // THREE.Points
@@ -121,11 +121,11 @@ export function initEmptyBeads(birthday, filledDates) {
   const hlMat = new THREE.MeshStandardMaterial({
     color:             HOVER_COLOR,
     emissive:          HOVER_COLOR,
-    emissiveIntensity: 0.6,
+    emissiveIntensity: 1,
     transparent:       true,
-    opacity:           0.9,
+    opacity:           1,
     metalness:         0.2,
-    roughness:         0.4,
+    roughness:         1,
   });
   _highlightMesh = new THREE.Mesh(hlGeo, hlMat);
   _highlightMesh.visible = false;

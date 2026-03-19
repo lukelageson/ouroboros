@@ -34,7 +34,7 @@ export function addBead(entry, birthday, animate = false) {
     emissive:          color,
     emissiveIntensity: 0.3,
     metalness:         0.25,
-    roughness:         0.5,
+    roughness:         1,
   });
 
   const mesh = new THREE.Mesh(geo, mat);
