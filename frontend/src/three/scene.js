@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { webgl, scene, css3dScene } from './renderer.js';
-import { buildGroundPlane } from './groundPlane.js';
+import { buildGroundPlane, updateGroundTime } from './groundPlane.js';
 import { buildRibbon } from './ribbon.js';
 
 export function initScene() {
@@ -37,21 +37,6 @@ export function initScene() {
   ground.material.fog = false;
   scene.add(ground);
 
-  // Semi-transparent dark overlay just above the reflector to desaturate it
-  const overlayGeo = new THREE.PlaneGeometry(10000, 10000);
-  const overlayMat = new THREE.MeshBasicMaterial({
-    color:       0x000000,
-    transparent: true,
-    opacity:     0.35,
-    depthWrite:  false,
-    fog:         false,
-  });
-  const groundOverlay = new THREE.Mesh(overlayGeo, overlayMat);
-  groundOverlay.rotation.x = -Math.PI / 2;
-  groundOverlay.position.y = 0.01;
-  groundOverlay.renderOrder = 0;
-  scene.add(groundOverlay);
-
   // Spiral parameters — kept for positioning calculations
   const DAYS_IN_YEAR = 365;
   const MS_PER_DAY = 86400000;
@@ -73,6 +58,6 @@ export function initScene() {
   return {
     ribbonGroup, arcSegments, dividerObjects, labels,
     spiralGroup, spiralSegments,
-    spiralTopY, birthday, today, ground, groundOverlay,
+    spiralTopY, birthday, today, ground, updateGroundTime,
   };
 }

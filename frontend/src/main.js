@@ -15,8 +15,7 @@ import {
   isPlanMode, isDetailMode, getCurrentMode,
   setPlanTargetY,
   applyDetailZoom,
-  worldToDetailScreen, getDetailCropScale,
-  moveDetailCamera,
+  panDetailCrop,
   onResizeDetailView,
 } from './three/cameraController.js';
 import { dateToPosition, dateToAngle } from './three/spiralMath.js';
@@ -67,7 +66,7 @@ initRenderer();
 const {
   ribbonGroup, arcSegments, dividerObjects, labels,
   spiralGroup, spiralSegments,
-  spiralTopY, birthday, today, ground, groundOverlay,
+  spiralTopY, birthday, today, ground, updateGroundTime,
 } = initScene();
 
 let ribbonVisible = true;
@@ -97,43 +96,53 @@ onDateLineChange((doy) => {
   updateEntryColumn(doy, getSectionCutDate(), loadedEntries, birthday);
 });
 
-// ── Detail focus date (tracks the spiral point at the center of detail view) ──
-let _detailFocusDate = null;
-
 // ── View Cube ─────────────────────────────────────────────────────────────────
 initViewCube(webgl, camera, controls, (mode) => {
   const effectiveTop = Math.min(spiralTopY, getSectionCutY());
   if (mode === 'detail') {
     setSectionCutY(spiralTopY);
-    _detailFocusDate = new Date();
     let detailFocusPos = todayPos;
     if (loadedEntries && loadedEntries.length > 0) {
       const latest = loadedEntries.reduce((a, b) =>
         new Date(a.entry_date) > new Date(b.entry_date) ? a : b
       );
-      _detailFocusDate = new Date(latest.entry_date);
-      detailFocusPos = dateToPosition(_detailFocusDate, birthday);
+      detailFocusPos = dateToPosition(new Date(latest.entry_date), birthday);
     }
     setViewMode('detail', spiralTopY, { todayPos: detailFocusPos });
   } else {
-    _detailFocusDate = null;
     setViewMode(mode, effectiveTop);
   }
 });
 
-// ── Ground reflection: exclude dense empty beads from the Reflector render ────
+// ── Ground reflection: filled beads bright, empty beads very dim, rest hidden ──
 if (ground && ground.onBeforeRender) {
   const _origGroundBeforeRender = ground.onBeforeRender;
   ground.onBeforeRender = function (renderer, scn, cam, geo, mat, grp) {
+    // Dim empty beads slightly so they read as visible dots in the reflection
     const emptyMesh = getEmptyBeadMesh();
-    const wasVisible = emptyMesh?.visible;
-    if (emptyMesh) emptyMesh.visible = false;
-    // Hide overlay during reflection pass (avoid self-reflection loop)
-    if (groundOverlay) groundOverlay.visible = false;
+    const wasEmptyColor = emptyMesh?.material?.uniforms?.color?.value?.clone();
+    if (emptyMesh) emptyMesh.material.uniforms.color.value.set(0x555555);
+
+    // Boost filled bead emissive so they glow brightly in the reflection
+    const beadMeshes = getAllBeadMeshes();
+    const beadEmissive = beadMeshes.map(m => m.material.emissiveIntensity);
+    for (const m of beadMeshes) m.material.emissiveIntensity = 10.0;
+
+    // Hide ribbon, spiral, and dividers — only beads appear in the reflection
+    const wasRibbonVisible = ribbonGroup ? ribbonGroup.visible : false;
+    if (ribbonGroup) ribbonGroup.visible = false;
+    const wasSpiralVisible = spiralGroup ? spiralGroup.visible : false;
+    if (spiralGroup) spiralGroup.visible = false;
+    const dividerWasVisible = dividerObjects.map(d => d.visible);
+    for (const d of dividerObjects) d.visible = false;
+
     _origGroundBeforeRender.call(this, renderer, scn, cam, geo, mat, grp);
-    if (emptyMesh && wasVisible !== undefined) emptyMesh.visible = wasVisible;
-    // Restore overlay visibility (frame callback will set it correctly next frame)
-    if (groundOverlay) groundOverlay.visible = true;
+
+    if (emptyMesh && wasEmptyColor) emptyMesh.material.uniforms.color.value.copy(wasEmptyColor);
+    for (let i = 0; i < beadMeshes.length; i++) beadMeshes[i].material.emissiveIntensity = beadEmissive[i];
+    if (ribbonGroup) ribbonGroup.visible = wasRibbonVisible;
+    if (spiralGroup) spiralGroup.visible = wasSpiralVisible;
+    for (let i = 0; i < dividerObjects.length; i++) dividerObjects[i].visible = dividerWasVisible[i];
   };
 }
 
@@ -141,6 +150,7 @@ if (ground && ground.onBeforeRender) {
 registerFrameCallback(() => {
   advanceTransition();
   updateViewCube();
+  updateGroundTime(ground);
 
   const mode = getCurrentMode();
   if (mode === 'perspective' || mode === 'plan' || mode === 'detail') {
@@ -149,16 +159,20 @@ registerFrameCallback(() => {
     hideSectionCutSlider();
   }
 
-  if (mode === 'plan') setPlanTargetY(getSectionCutY());
+  if (mode === 'plan' || mode === 'detail') setPlanTargetY(getSectionCutY());
+
+  // ── Ground plane visibility per view mode ──────────────────────────────────
+  const groundVisibleInMode = {
+    perspective: true,
+    plan:        true,
+    detail:      false,
+  };
+  if (ground) ground.visible = groundVisibleInMode[mode] ?? false;
 
   if (mode === 'detail') {
-    if (ground) ground.visible = false;
-    if (groundOverlay) groundOverlay.visible = false;
     updateDetailLabels(loadedEntries, birthday, camera, controls.target.y, true);
   } else {
     clearDetailLabels();
-    if (ground) ground.visible = (mode === 'perspective');
-    if (groundOverlay) groundOverlay.visible = (mode === 'perspective');
   }
 
   setPanelViewMode(mode || 'perspective');
@@ -330,44 +344,12 @@ let lastMouseEvent = null;
 
 window.addEventListener('mousemove', (e) => {
   lastMouseEvent = e;
-  if (_isDetailPanning && _detailFocusDate) {
-    // Incremental mouse delta in screen pixels
+  if (_isDetailPanning) {
     const sdx = e.clientX - _panDownX;
     const sdy = e.clientY - _panDownY;
     _panDownX = e.clientX;
     _panDownY = e.clientY;
-
-    // Compute tangent direction in full-frame pixels via two nearby points
-    const MS_PER_DAY = 86400000;
-    const prevPos = dateToPosition(new Date(_detailFocusDate.getTime() - MS_PER_DAY), birthday);
-    const nextPos = dateToPosition(new Date(_detailFocusDate.getTime() + MS_PER_DAY), birthday);
-    const pScreen = worldToDetailScreen(prevPos);
-    const nScreen = worldToDetailScreen(nextPos);
-
-    const tFFx = nScreen.x - pScreen.x;
-    const tFFy = nScreen.y - pScreen.y;
-    const tFFlen = Math.sqrt(tFFx * tFFx + tFFy * tFFy);
-
-    if (tFFlen > 0.001) {
-      const tNormX = tFFx / tFFlen;
-      const tNormY = tFFy / tFFlen;
-
-      // Scale screen-pixel delta to full-frame-pixel delta for 1:1 speed
-      const scale = getDetailCropScale();
-      const ffDx = sdx * scale.x;
-      const ffDy = sdy * scale.y;
-
-      // Project onto tangent and convert to days
-      const projected = ffDx * tNormX + ffDy * tNormY;
-      const pixelsPerDay = tFFlen / 2;
-      const daysDelta = -projected / pixelsPerDay;
-
-      _detailFocusDate = new Date(_detailFocusDate.getTime() + daysDelta * MS_PER_DAY);
-
-      // Move camera above the new focus position
-      const newPos = dateToPosition(_detailFocusDate, birthday);
-      moveDetailCamera(newPos.x, newPos.z);
-    }
+    panDetailCrop(sdx, sdy);
   }
 });
 
@@ -386,8 +368,9 @@ registerFrameCallback(() => {
   if (mode !== 'perspective' && mode !== 'plan' && mode !== 'detail') return;
 
   const ceilingDate = getSectionCutDate();
-  // Dim beads in perspective view (hover callback overrides for the hovered bead)
-  const baseEmissive = mode === 'perspective' ? 0.15 : 0.3;
+  // Plan/detail cameras are 200 units above the spiral; FogExp2 dims beads more
+  // at that distance than in perspective view (~130 units). Boost emissive to compensate.
+  const baseEmissive = (isPlanMode() || isDetailMode()) ? 0.45 : 0.3;
 
   if (mode === 'detail') {
     const floorDate = getFloorDate();
@@ -424,8 +407,10 @@ function _worldToScreen(worldPos) {
 registerFrameCallback((cam) => {
   if (!lastMouseEvent) return;
 
+  const baseEmissive = (isPlanMode() || isDetailMode()) ? 0.45 : 0.3;
+
   if (_hoveredBeadMesh && !_hoveredBeadMesh.visible) {
-    _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+    _hoveredBeadMesh.material.emissiveIntensity = baseEmissive;
     _hoveredBeadMesh.scale.setScalar(1.0);
     _hoveredBeadMesh = null;
     _hoveredBeadScreenPos = null;
@@ -442,7 +427,7 @@ registerFrameCallback((cam) => {
   if (newHovered) {
     if (_hoveredBeadMesh !== newHovered) {
       if (_hoveredBeadMesh) {
-        _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+        _hoveredBeadMesh.material.emissiveIntensity = baseEmissive;
         _hoveredBeadMesh.scale.setScalar(1.0);
       }
       newHovered.material.emissiveIntensity = 0.85;
@@ -460,7 +445,7 @@ registerFrameCallback((cam) => {
     const tooFar = !sp ||
       Math.hypot(lastMouseEvent.clientX - sp.x, lastMouseEvent.clientY - sp.y) > 5;
     if (tooFar) {
-      _hoveredBeadMesh.material.emissiveIntensity = 0.3;
+      _hoveredBeadMesh.material.emissiveIntensity = baseEmissive;
       _hoveredBeadMesh.scale.setScalar(1.0);
       _hoveredBeadMesh = null;
       _hoveredBeadScreenPos = null;
