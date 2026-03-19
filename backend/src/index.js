@@ -14,6 +14,10 @@ const PORT = process.env.PORT || 3001;
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+// Trust Render's reverse proxy so req.secure is true over HTTPS
+// Required for secure session cookies to be set correctly in production
+if (isProduction) app.set('trust proxy', 1);
+
 app.use(cors({
   origin: isProduction ? false : 'http://localhost:5173',
   credentials: true,
